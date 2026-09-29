@@ -1,0 +1,5 @@
+-- Schema and row-level security now live in:
+-- supabase/migrations/20260920093038_secure_camera_and_family_model.sql
+-- supabase/migrations/20260920093144_restrict_signup_trigger_execution.sql
+-- Apply that migration to the Supabase project used by this app.
+-- Do not restore the earlier public USING (true) policies.

@@ -1,0 +1,9 @@
+# คัดลอกเป็น go2rtc.yaml แล้วแก้ชื่อกล้องและแหล่งภาพให้ตรงอุปกรณ์จริง
+# อย่าใส่รหัสผ่านกล้องในไฟล์ที่เผยแพร่หรือ commit
+streams:
+  home_cctv:
+    - rtsp://user:password@camera-address/stream-path
+    - ffmpeg:home_cctv#video=mjpeg
+  home_webcam:
+    - ffmpeg:device?video=0#video=h264
+    - ffmpeg:home_webcam#video=mjpeg
