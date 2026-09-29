@@ -44,16 +44,20 @@ example
 
 # generated Android output
 /android/.gradle/
+/android/.gradle.broken-*/
 /android/.kotlin/
 /android/build/
 /android/app/build/
 /android/app/.cxx/
+/android/app/.cxx.broken-*/
 /android/local.properties
+/android/keystore.properties
 
 # generated test and distribution files
 /test-artifacts/
 /supabase/.temp/
 /*.apk
+/*.aab
 /.chrome-test*/
 /dist-android/
 /.claude/
