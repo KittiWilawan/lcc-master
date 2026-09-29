@@ -2,7 +2,7 @@ import { loadConfig } from './config.mjs';
 import { nextAlertState } from './core.mjs';
 import {
   analyzePair, analyzePoseSequence, identifyFallingPerson, mergePoseAndIdentity,
-  poseOnlyAnalysis, readCameraImage,
+  poseOnlyAnalysis, readCameraFrame,
 } from './vision.mjs';
 import {
   connectFamily,
@@ -38,7 +38,7 @@ async function connectWithRetry(config, connect) {
 
 async function monitorCamera(connection, config, camera, state, publishDetectedFall) {
   try {
-    const image = await readCameraImage(camera.snapshot_url, config);
+    const image = await readCameraFrame(camera, config);
     if (!state.previous) {
       state.previous = image;
       state.frames = [image];
@@ -155,16 +155,17 @@ async function main() {
         confirmations: 0,
         lastAlertAt: -Infinity,
         alerting: false,
-        snapshotUrl: camera.snapshot_url,
+        sourceUrl: camera.snapshot_url || camera.url,
         identityReferenceSignature: camera.identityReferenceSignature,
       };
-      if (state.snapshotUrl !== camera.snapshot_url ||
+      const sourceUrl = camera.snapshot_url || camera.url;
+      if (state.sourceUrl !== sourceUrl ||
           state.identityReferenceSignature !== camera.identityReferenceSignature) {
         state.previous = undefined;
         state.frames = [];
         state.confirmations = 0;
         state.alerting = false;
-        state.snapshotUrl = camera.snapshot_url;
+        state.sourceUrl = sourceUrl;
         state.identityReferenceSignature = camera.identityReferenceSignature;
       }
       states.set(camera.id, state);
@@ -176,7 +177,7 @@ async function main() {
     const detail = refreshError ? 'อ่านรายการกล้องไม่สำเร็จ' :
       errorCount ? `ตรวจภาพไม่สำเร็จ ${errorCount} กล้อง` :
       cameras.length && !analyzedCount ? 'กำลังรับภาพแรกจากกล้อง' :
-      cameras.length ? null : 'ยังไม่มีกล้องที่พร้อมส่งภาพนิ่งให้ AI';
+      cameras.length ? null : 'ยังไม่มีกล้องที่พร้อมส่งภาพให้ AI';
     const nextHealthSignature = JSON.stringify({ state, cameraCount: cameras.length, detail });
     if (nextHealthSignature !== healthSignature || Date.now() - healthPublishedAt >= config.healthIntervalMs) {
       try {

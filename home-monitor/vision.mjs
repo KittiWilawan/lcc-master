@@ -1,8 +1,26 @@
 import {
   analysisSchema, identitySchema, validateAnalysis, validateIdentity,
 } from './core.mjs';
+import { spawn } from 'node:child_process';
 
 const REQUIRED_IDENTITY_REFERENCE_COUNT = 4;
+
+function validateImageBytes(bytes) {
+  const jpeg = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const pngHeader = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const png = bytes.length >= pngHeader.length && bytes.subarray(0, pngHeader.length).equals(pngHeader);
+  if (!jpeg && !png) throw new Error('แหล่งภาพไม่ได้ส่ง JPEG หรือ PNG');
+  return { bytes, contentType: jpeg ? 'image/jpeg' : 'image/png' };
+}
+
+function validateAllowedSource(url, config) {
+  const parsed = new URL(url);
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('ลิงก์กล้องต้องเป็น HTTP หรือ HTTPS');
+  if (config.enforceAllowedOrigins !== false && !config.allowedOrigins.includes(parsed.origin)) {
+    throw new Error('ลิงก์กล้องไม่ได้อยู่ในเกตเวย์ที่อนุญาต');
+  }
+  return parsed;
+}
 
 export async function analyzePoseSequence(images, config) {
   if (!Array.isArray(images) || images.length !== config.poseModelFrames) {
@@ -105,9 +123,7 @@ export async function identifyFallingPerson(current, config, identityReferences)
 }
 
 export async function readCameraImage(url, config) {
-  const parsed = new URL(url);
-  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('ลิงก์ภาพนิ่งต้องเป็น HTTP หรือ HTTPS');
-  if (!config.allowedOrigins.includes(parsed.origin)) throw new Error('ลิงก์ภาพนิ่งไม่ได้อยู่ในเกตเวย์ที่อนุญาต');
+  const parsed = validateAllowedSource(url, config);
   const response = await fetch(parsed, {
     cache: 'no-store',
     redirect: 'manual',
@@ -129,10 +145,83 @@ export async function readCameraImage(url, config) {
     chunks.push(chunk);
   }
   const bytes = Buffer.concat(chunks);
-  const jpeg = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-  const png = bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-  if (!jpeg && !png) throw new Error('ลิงก์ภาพนิ่งไม่ได้ส่ง JPEG หรือ PNG');
-  return { bytes, contentType: jpeg ? 'image/jpeg' : 'image/png' };
+  return validateImageBytes(bytes);
+}
+
+export async function readCameraStreamFrame(url, config) {
+  const parsed = validateAllowedSource(url, config);
+  const timeoutMicroseconds = String(config.imageTimeoutMs * 1000);
+  const argumentsList = [
+    '-hide_banner', '-loglevel', 'error', '-nostdin',
+    '-rw_timeout', timeoutMicroseconds,
+    '-i', parsed.toString(),
+    '-frames:v', '1', '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1',
+  ];
+  return new Promise((resolve, reject) => {
+    const process = spawn(config.ffmpegCommand, argumentsList, {
+      shell: false,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const chunks = [];
+    const errorChunks = [];
+    let total = 0;
+    let finished = false;
+    const finish = (error, result) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve(result);
+    };
+    const timer = setTimeout(() => {
+      process.kill();
+      finish(new Error('สตรีมกล้องใช้เวลาตอบกลับนานเกินไป'));
+    }, config.imageTimeoutMs);
+    process.stdout.on('data', (chunk) => {
+      total += chunk.length;
+      if (total > config.maxImageBytes) {
+        process.kill();
+        finish(new Error('ภาพจากสตรีมมีขนาดเกินที่ตั้งค่า'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    process.stderr.on('data', (chunk) => {
+      if (errorChunks.reduce((sum, item) => sum + item.length, 0) < 2000) errorChunks.push(chunk);
+    });
+    process.once('error', () => finish(new Error('ยังไม่พบโปรแกรมอ่านสตรีมกล้องบนคอม')));
+    process.once('close', (code) => {
+      if (finished) return;
+      if (code !== 0) {
+        const detail = Buffer.concat(errorChunks).toString('utf8').trim().slice(0, 300);
+        finish(new Error(detail || 'อ่านสตรีมกล้องไม่สำเร็จ'));
+        return;
+      }
+      try {
+        finish(null, validateImageBytes(Buffer.concat(chunks)));
+      } catch (error) {
+        finish(error);
+      }
+    });
+  });
+}
+
+export function selectCameraSource(camera) {
+  if (camera.snapshot_url) {
+    const path = new URL(camera.snapshot_url).pathname.toLowerCase();
+    const streamInSnapshotField = path.endsWith('.m3u8') || path.endsWith('.mjpg') || path.endsWith('.mjpeg');
+    return { type: streamInSnapshotField ? 'stream' : 'image', url: camera.snapshot_url };
+  }
+  if (camera.url) return { type: 'stream', url: camera.url };
+  return null;
+}
+
+export async function readCameraFrame(camera, config) {
+  const source = selectCameraSource(camera);
+  if (source?.type === 'image') return readCameraImage(source.url, config);
+  if (source?.type === 'stream') return readCameraStreamFrame(source.url, config);
+  throw new Error('กล้องยังไม่มีลิงก์ภาพหรือสตรีมสำหรับ AI');
 }
 
 export async function analyzePair(previous, current, config, identityReferences = []) {

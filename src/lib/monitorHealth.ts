@@ -31,7 +31,7 @@ export function describeMonitorHealth(health: MonitorHealth | null, now: number,
     return { title: 'ระบบกล้องหรือ AI ขัดข้อง', subtitle: health.detail || 'ตรวจสถานะโปรแกรมบนคอม', online: false };
   }
   if (health.state === 'idle') {
-    return { title: 'คอมบ้านออนไลน์ แต่ยังไม่ตรวจภาพ', subtitle: health.detail || 'เพิ่มกล้องและลิงก์ภาพนิ่ง', online: false };
+    return { title: 'คอมบ้านออนไลน์ แต่ยังไม่ตรวจภาพ', subtitle: health.detail || 'เพิ่มกล้องและทดสอบลิงก์กล้อง', online: false };
   }
   if (health.analyzed_count === 0) {
     return { title: 'คอมบ้านกำลังเริ่มตรวจภาพ', subtitle: health.detail || 'รอภาพแรกจากกล้อง', online: false };

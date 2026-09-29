@@ -36,7 +36,7 @@ import { describeCameraAttribution, getAnalysisIntervalMs, getCaptureQuality } f
 import { supabase } from '../../lib/supabase';
 import { describeMonitorHealth, loadMonitorHealth } from '../../lib/monitorHealth';
 import { getFriendlyErrorMessage } from '../../lib/friendlyError';
-import { testSnapshotConnection } from '../../lib/cameraConnectionTest';
+import { testCameraConnection } from '../../lib/cameraConnectionTest';
 import { callPhoneNumber, getEmergencyPhoneNumber } from '../../lib/phone';
 import { startBackgroundMonitoring, stopBackgroundMonitoring } from '../../lib/backgroundMonitoring';
 import { getTrackedMemberIds, shouldMonitorCamera, usesAllPeopleMode } from '../../lib/monitoringPolicy';
@@ -80,6 +80,7 @@ export default function DashboardScreen() {
   const [newCamType, setNewCamType] = useState<'video' | 'device' | 'rtsp'>('rtsp');
   const [newCamUrl, setNewCamUrl] = useState('');
   const [newSnapshotUrl, setNewSnapshotUrl] = useState('');
+  const [showAdvancedCamera, setShowAdvancedCamera] = useState(false);
   const [assignedMemberId, setAssignedMemberId] = useState<string>('');
   const [cameraTest, setCameraTest] = useState<{ state: 'idle' | 'testing' | 'success' | 'error'; message: string }>({ state: 'idle', message: '' });
   const [savingCamera, setSavingCamera] = useState(false);
@@ -195,12 +196,12 @@ export default function DashboardScreen() {
         Alert.alert('URL ไม่ถูกต้อง', 'กรุณาระบุ URL ของสตรีมกล้อง');
         return;
       }
-      if (!newSnapshotUrl.trim()) {
-        Alert.alert('ยังไม่มีภาพสำหรับ AI', 'กรุณากรอกลิงก์ภาพนิ่ง JPEG/PNG แล้วกด “ทดสอบภาพกล้อง”');
+      if (newCamType === 'video' && !newSnapshotUrl.trim()) {
+        Alert.alert('ยังไม่มีภาพสำหรับ AI', 'วิดีโอทดสอบต้องมีลิงก์ภาพนิ่งสำหรับ AI');
         return;
       }
       if (cameraTest.state !== 'success') {
-        Alert.alert('กรุณาทดสอบกล้องก่อน', 'กด “ทดสอบภาพกล้อง” และรอให้ขึ้นว่าพร้อมใช้งาน');
+        Alert.alert('กรุณาทดสอบกล้องก่อน', 'กด “ทดสอบการเชื่อมต่อ” และรอให้ขึ้นว่าพร้อมใช้งาน');
         return;
       }
       if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') {
@@ -250,7 +251,7 @@ export default function DashboardScreen() {
             name: cameraName,
             type: newCamType,
             url: (newCamType === 'video' || newCamType === 'rtsp') ? newCamUrl : null,
-            snapshot_url: newSnapshotUrl.trim() || null,
+            snapshot_url: newSnapshotUrl.trim() || (newCamType === 'rtsp' ? newCamUrl.trim() : null),
             protocol,
             assigned_member_id: assignedMemberId || null,
           })
@@ -264,7 +265,7 @@ export default function DashboardScreen() {
         name: cameraName,
         type: newCamType,
         url: (newCamType === 'video' || newCamType === 'rtsp') ? newCamUrl : undefined,
-        snapshot_url: newSnapshotUrl.trim() || undefined,
+        snapshot_url: newSnapshotUrl.trim() || (newCamType === 'rtsp' ? newCamUrl.trim() : undefined),
         protocol,
         assigned_member_id: assignedMemberId || undefined,
         assigned_member_name: assignedMember?.display_name,
@@ -281,6 +282,7 @@ export default function DashboardScreen() {
       setNewCamName('');
       setNewCamUrl('');
       setNewSnapshotUrl('');
+      setShowAdvancedCamera(false);
       setAssignedMemberId('');
       setCameraTest({ state: 'idle', message: '' });
     } catch (err) {
@@ -293,7 +295,7 @@ export default function DashboardScreen() {
   const handleTestCamera = async () => {
     setCameraTest({ state: 'testing', message: 'กำลังรับภาพจากกล้อง...' });
     try {
-      const result = await testSnapshotConnection(newSnapshotUrl);
+      const result = await testCameraConnection(newCamUrl, newSnapshotUrl);
       setCameraTest({ state: result.success ? 'success' : 'error', message: result.message });
     } catch (error) {
       setCameraTest({ state: 'error', message: getFriendlyErrorMessage(error, 'ทดสอบกล้องไม่สำเร็จ กรุณาลองอีกครั้ง') });
@@ -1113,17 +1115,30 @@ export default function DashboardScreen() {
 
             {newCamType === 'rtsp' && (
               <>
-                <Text style={styles.inputLabel}>ลิงก์ภาพสด HLS จากกล้องหรือเครื่องเกตเวย์</Text>
+                <Text style={styles.inputLabel}>ลิงก์กล้อง</Text>
                 <TextInput
                   style={styles.input}
                   placeholder="https://camera-gateway.example/live.m3u8"
                   value={newCamUrl}
-                  onChangeText={setNewCamUrl}
+                  onChangeText={(value) => {
+                    setNewCamUrl(value);
+                    setCameraTest({ state: 'idle', message: '' });
+                  }}
                   autoCapitalize="none"
                 />
                 <Text style={{ fontSize: 10, color: '#64748b', marginTop: -6, marginBottom: 12 }}>
-                  CCTV แบบ RTSP และเว็บแคม USB ต้องเชื่อมผ่านเครื่องเกตเวย์ก่อน มือถือต้องเข้าถึงลิงก์นี้ได้
+                  ใส่ HLS (.m3u8) หรือ MJPEG เพียงช่องเดียว ระบบจะดึงภาพให้ AI อัตโนมัติ
                 </Text>
+                <TouchableOpacity
+                  style={styles.advancedCameraButton}
+                  onPress={() => setShowAdvancedCamera((current) => !current)}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: showAdvancedCamera }}
+                >
+                  <MaterialCommunityIcons name="tune-variant" size={18} color="#475569" />
+                  <Text style={styles.advancedCameraButtonText}>ตัวเลือกเพิ่มเติม</Text>
+                  <MaterialCommunityIcons name={showAdvancedCamera ? 'chevron-up' : 'chevron-down'} size={20} color="#64748b" />
+                </TouchableOpacity>
               </>
             )}
 
@@ -1134,7 +1149,10 @@ export default function DashboardScreen() {
                   style={styles.input}
                   placeholder="https://commondatastorage.googleapis.com/.../sample.mp4"
                   value={newCamUrl}
-                  onChangeText={setNewCamUrl}
+                  onChangeText={(value) => {
+                    setNewCamUrl(value);
+                    setCameraTest({ state: 'idle', message: '' });
+                  }}
                   autoCapitalize="none"
                 />
               </>
@@ -1142,32 +1160,38 @@ export default function DashboardScreen() {
 
             {newCamType !== 'device' && (
               <>
-                <Text style={styles.inputLabel}>ลิงก์ภาพนิ่ง JPEG/PNG สำหรับ AI</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="https://camera-gateway.example/snapshot.jpg"
-                  value={newSnapshotUrl}
-                  onChangeText={(value) => {
-                    setNewSnapshotUrl(value);
-                    setCameraTest({ state: 'idle', message: '' });
-                  }}
-                  autoCapitalize="none"
-                />
-                <Text style={{ fontSize: 10, color: '#64748b', marginTop: -6, marginBottom: 12 }}>
-                  ต้องมีลิงก์ภาพนิ่งที่อัปเดตได้สำหรับการวิเคราะห์กล้องภายนอก
-                </Text>
+                {(newCamType === 'video' || showAdvancedCamera) ? (
+                  <>
+                    <Text style={styles.inputLabel}>
+                      ลิงก์ภาพนิ่ง JPEG/PNG {newCamType === 'video' ? 'สำหรับ AI' : '(ถ้ามี)'}
+                    </Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="https://camera-gateway.example/snapshot.jpg"
+                      value={newSnapshotUrl}
+                      onChangeText={(value) => {
+                        setNewSnapshotUrl(value);
+                        setCameraTest({ state: 'idle', message: '' });
+                      }}
+                      autoCapitalize="none"
+                    />
+                    <Text style={{ fontSize: 10, color: '#64748b', marginTop: -6, marginBottom: 12 }}>
+                      ถ้ามีลิงก์ภาพนิ่ง ระบบจะเลือกใช้ก่อนเพื่อประหยัดแรงคอม
+                    </Text>
+                  </>
+                ) : null}
                 <TouchableOpacity
                   style={[styles.cameraTestButton, cameraTest.state === 'testing' && { opacity: 0.65 }]}
                   onPress={() => void handleTestCamera()}
                   disabled={cameraTest.state === 'testing'}
                   accessibilityRole="button"
-                  accessibilityLabel="ทดสอบภาพจากกล้อง"
+                  accessibilityLabel="ทดสอบการเชื่อมต่อกล้อง"
                 >
                   {cameraTest.state === 'testing'
                     ? <ActivityIndicator size="small" color="#065f46" />
                     : <MaterialCommunityIcons name="camera-outline" size={20} color="#065f46" />}
                   <Text style={styles.cameraTestButtonText}>
-                    {cameraTest.state === 'testing' ? 'กำลังทดสอบภาพ...' : 'ทดสอบภาพกล้องก่อนบันทึก'}
+                    {cameraTest.state === 'testing' ? 'กำลังทดสอบ...' : 'ทดสอบการเชื่อมต่อ'}
                   </Text>
                 </TouchableOpacity>
                 {cameraTest.message ? (
@@ -1180,7 +1204,7 @@ export default function DashboardScreen() {
                     <Text style={[styles.cameraTestResultText, { color: cameraTest.state === 'success' ? '#166534' : '#991b1b' }]}>{cameraTest.message}</Text>
                   </View>
                 ) : null}
-                {cameraTest.state === 'success' ? (
+                {cameraTest.state === 'success' && newSnapshotUrl.trim() ? (
                   <View style={styles.cameraPreviewCard}>
                     <Image
                       source={{ uri: newSnapshotUrl }}
@@ -1453,6 +1477,24 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     marginBottom: 10,
+  },
+  advancedCameraButton: {
+    minHeight: 46,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    gap: 8,
+    marginBottom: 14,
+  },
+  advancedCameraButtonText: {
+    flex: 1,
+    color: '#475569',
+    fontSize: 13,
+    fontWeight: '700',
   },
   cameraTestButtonText: {
     color: '#065f46',

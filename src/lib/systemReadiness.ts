@@ -5,6 +5,7 @@ import { STORAGE_KEY_EXPO_PUSH_TOKEN } from './pushNotifications';
 import { supabase } from './supabase';
 import { isBackgroundMonitoringRunning } from './backgroundMonitoring';
 import { getTrackedMemberIds, shouldMonitorCamera, usesAllPeopleMode } from './monitoringPolicy';
+import { describeMonitorHealth, loadMonitorHealth } from './monitorHealth';
 
 export type ReadinessStepId =
   | 'account'
@@ -64,7 +65,7 @@ export async function checkSystemReadiness(): Promise<SystemReadiness> {
   const { data: cameras, error: cameraError } = familyId
     ? await supabase
       .from('cameras')
-      .select('id,assigned_member_id,snapshot_url,type')
+      .select('id,assigned_member_id,url,snapshot_url,type')
       .eq('family_id', familyId)
     : { data: [], error: null };
   if (cameraError) throw cameraError;
@@ -72,13 +73,26 @@ export async function checkSystemReadiness(): Promise<SystemReadiness> {
   const trackedIds = getTrackedMemberIds(trackedRecipients);
   const allPeopleMode = usesAllPeopleMode(trackedIds);
   const assignedCameras = (cameras ?? []).filter((camera) =>
-    camera.type !== 'device' && shouldMonitorCamera(camera, trackedIds)
+    camera.type !== 'device' && Boolean(camera.snapshot_url || camera.url) &&
+    shouldMonitorCamera(camera, trackedIds)
   );
   const cameraReady = assignedCameras.length > 0;
 
-  const backgroundReady = cameraReady
-    ? await isBackgroundMonitoringRunning().catch(() => false)
-    : false;
+  const homeWorkerMode = process.env.EXPO_PUBLIC_AI_MODE === 'home_worker';
+  let backgroundReady = false;
+  let backgroundDescription = 'เปิดหน้าหลักหนึ่งครั้ง เพื่อเริ่มการเฝ้าระวังเบื้องหลัง';
+  if (cameraReady && homeWorkerMode && familyId) {
+    const staleAfterMs = Number(process.env.EXPO_PUBLIC_MONITOR_STATUS_STALE_MS);
+    if (Number.isSafeInteger(staleAfterMs) && staleAfterMs > 0) {
+      const monitor = describeMonitorHealth(await loadMonitorHealth(familyId), Date.now(), staleAfterMs);
+      backgroundReady = monitor.online;
+      backgroundDescription = monitor.online ? monitor.subtitle : `${monitor.title} · ${monitor.subtitle}`;
+    } else {
+      backgroundDescription = 'ยังไม่ได้ตั้งค่าเวลาตรวจสถานะคอม';
+    }
+  } else if (cameraReady) {
+    backgroundReady = await isBackgroundMonitoringRunning().catch(() => false);
+  }
 
   return createReadiness([
     {
@@ -122,17 +136,17 @@ export async function checkSystemReadiness(): Promise<SystemReadiness> {
       title: 'กล้องที่ใช้ดูแล',
       description: cameraReady
         ? `AI อ่านภาพจากกล้อง ${assignedCameras.length} ตัว · ${allPeopleMode ? 'ตรวจทุกคน' : 'ตรวจบุคคลเป้าหมาย'}`
-        : 'เพิ่มกล้องภายนอกและทดสอบลิงก์ภาพนิ่ง',
+        : 'เพิ่มกล้องภายนอกและทดสอบลิงก์กล้อง',
       ready: cameraReady,
       actionLabel: 'เพิ่มกล้อง',
       route: '/home',
     },
     {
       id: 'background',
-      title: 'เฝ้าระวังเมื่อปิดหน้าจอ',
+      title: homeWorkerMode ? 'คอม AI กำลังทำงาน' : 'เฝ้าระวังเมื่อปิดหน้าจอ',
       description: backgroundReady
-        ? `กำลังเฝ้าระวังกล้อง ${assignedCameras.length} ตัว ปิดหน้าจอได้`
-        : 'เปิดหน้าหลักหนึ่งครั้ง เพื่อเริ่มการเฝ้าระวังเบื้องหลัง',
+        ? homeWorkerMode ? backgroundDescription : `กำลังเฝ้าระวังกล้อง ${assignedCameras.length} ตัว ปิดหน้าจอได้`
+        : backgroundDescription,
       ready: backgroundReady,
       actionLabel: 'เปิดการเฝ้าระวัง',
       route: '/home',

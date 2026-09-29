@@ -181,7 +181,7 @@ async function revokeDevice(service: ReturnType<typeof createClient>, body: Json
 async function deviceConfiguration(service: ReturnType<typeof createClient>, device: { id: string; family_id: string }) {
   const [{ data, error }, { count, error: memberError }] = await Promise.all([
     service.from('cameras')
-      .select('id,name,type,snapshot_url,assigned_member_id,family_members(display_name,is_tracked,user_id,identity_references(storage_path,pose))')
+      .select('id,name,type,url,protocol,snapshot_url,assigned_member_id,family_members(display_name,is_tracked,user_id,identity_references(storage_path,pose))')
       .eq('family_id', device.family_id).order('created_at', { ascending: true }),
     service.from('family_members').select('id', { count: 'exact', head: true })
       .eq('family_id', device.family_id).is('user_id', null).eq('is_tracked', true),

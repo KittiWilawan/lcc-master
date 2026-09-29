@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { loadConfig } from './config.mjs';
 import { connectFamily, readCameras } from './cloud.mjs';
 import { connectDevice, readDeviceCameras } from './device-cloud.mjs';
-import { readCameraImage } from './vision.mjs';
+import { readCameraFrame } from './vision.mjs';
 import { readPositiveInteger, requireString } from './core.mjs';
 
 const results = [];
@@ -58,6 +58,17 @@ await check('Python สำหรับ AI', async () => {
   return 'ไลบรารี AI พร้อม';
 });
 
+await check('โปรแกรมอ่าน HLS/MJPEG', async () => {
+  const ffmpeg = requireString('FFMPEG_COMMAND', process.env);
+  const probe = spawnSync(ffmpeg, ['-version'], {
+    encoding: 'utf-8',
+    timeout: startupTimeoutMs,
+    windowsHide: true,
+  });
+  if (probe.error || probe.status !== 0) throw new Error('ยังไม่พบ FFmpeg สำหรับอ่านสตรีมกล้อง');
+  return 'พร้อมดึงภาพจากลิงก์กล้องโดยไม่ต้องกรอกลิงก์ภาพนิ่ง';
+});
+
 await check('บริการตรวจท่าทาง', async () => {
   const healthUrl = requireString('POSE_MODEL_HEALTH_URL', process.env);
   const response = await fetch(healthUrl, { signal: AbortSignal.timeout(diagnosticTimeoutMs) });
@@ -106,7 +117,7 @@ await check('กล้องที่เฝ้าดู', async () => {
     ? await readDeviceCameras(supabase)
     : await readCameras(supabase, config.familyId);
   if (!cameras.length) throw new Error('ยังไม่มีกล้องภายนอกที่ผูกกับผู้รับการดูแล');
-  await readCameraImage(cameras[0].snapshot_url, config);
+  await readCameraFrame(cameras[0], config);
   return `พบ ${cameras.length} กล้อง และอ่านภาพตัวอย่างสำเร็จ`;
 });
 

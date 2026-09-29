@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { nextAlertState, requireUuid, validateAnalysis, validateIdentity } from './core.mjs';
 import {
   analyzePair, analyzePoseSequence, identifyFallingPerson, mergePoseAndIdentity,
-  poseOnlyAnalysis, readCameraImage,
+  poseOnlyAnalysis, readCameraImage, selectCameraSource,
 } from './vision.mjs';
 
 test('requires two confirmed samples and resets after a non-fall result', () => {
@@ -189,6 +189,19 @@ test('camera source is restricted to configured origin and rejects redirects', a
   } finally {
     globalThis.fetch = oldFetch;
   }
+});
+
+test('camera prefers an optional snapshot and otherwise uses the primary stream', () => {
+  assert.deepEqual(selectCameraSource({
+    snapshot_url: 'http://camera/snapshot.jpg', url: 'http://camera/live.m3u8',
+  }), { type: 'image', url: 'http://camera/snapshot.jpg' });
+  assert.deepEqual(selectCameraSource({
+    snapshot_url: null, url: 'http://camera/live.m3u8',
+  }), { type: 'stream', url: 'http://camera/live.m3u8' });
+  assert.deepEqual(selectCameraSource({
+    snapshot_url: 'http://camera/live.m3u8', url: null,
+  }), { type: 'stream', url: 'http://camera/live.m3u8' });
+  assert.equal(selectCameraSource({ snapshot_url: null, url: null }), null);
 });
 
 test('pose sequence sends every frame and rejects malformed output', async () => {

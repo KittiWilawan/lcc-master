@@ -30,10 +30,14 @@ test('analyzes every ready camera when no care recipient is selected', () => {
       family_members: { display_name: 'คุณตา', is_tracked: false, user_id: null },
     },
     { id: 'phone', type: 'device', snapshot_url: null, assigned_member_id: null, family_members: null },
+    {
+      id: 'hls', type: 'rtsp', url: 'http://localhost/live.m3u8', snapshot_url: null,
+      assigned_member_id: null, family_members: null,
+    },
     { id: 'offline', type: 'rtsp', snapshot_url: null, assigned_member_id: null, family_members: null },
   ];
   const selected = selectMonitoredCameras(cameras, false);
-  assert.deepEqual(selected.map((item) => item.id), ['living-room', 'bedroom']);
+  assert.deepEqual(selected.map((item) => item.id), ['living-room', 'bedroom', 'hls']);
   assert.equal(selected.every((item) => item.allPeopleMode), true);
   assert.equal(describeEventAttribution(selected[0], {
     fallingPersonMatch: 'uncertain', identityConfidence: 0,

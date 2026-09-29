@@ -19,7 +19,7 @@ export async function connectFamily(config) {
 export async function readCameras(client, familyId) {
   const [{ data, error }, { count, error: memberError }] = await Promise.all([
     client.from('cameras')
-      .select('id,name,type,snapshot_url,assigned_member_id,family_members(display_name,is_tracked,user_id,identity_references(storage_path,pose))')
+      .select('id,name,type,url,protocol,snapshot_url,assigned_member_id,family_members(display_name,is_tracked,user_id,identity_references(storage_path,pose))')
       .eq('family_id', familyId)
       .order('created_at', { ascending: true }),
     client.from('family_members').select('id', { count: 'exact', head: true })
@@ -57,7 +57,9 @@ async function downloadIdentityReferences(client, references) {
 export function selectMonitoredCameras(cameras, hasTrackedRecipients = cameras.some((camera) =>
   camera.family_members?.is_tracked === true && camera.family_members?.user_id === null
 )) {
-  const ready = cameras.filter((camera) => camera.type !== 'device' && camera.snapshot_url);
+  const ready = cameras.filter((camera) =>
+    camera.type !== 'device' && (camera.snapshot_url || camera.url)
+  );
   if (!hasTrackedRecipients) {
     return ready.map((camera) => ({ ...camera, allPeopleMode: true }));
   }

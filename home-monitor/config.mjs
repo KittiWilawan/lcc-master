@@ -52,6 +52,8 @@ export async function loadConfig(source = process.env) {
     deviceCredentialsFile,
     deviceFunctionName: requireString('MONITOR_DEVICE_FUNCTION_NAME', source),
     allowedOrigins: readAllowedOrigins(source),
+    enforceAllowedOrigins: !deviceCredentials,
+    ffmpegCommand: requireString('FFMPEG_COMMAND', source),
     poseModelUrl: requireUrl('POSE_MODEL_URL', source, ['http:', 'https:']),
     poseModelTimeoutMs: readPositiveInteger('POSE_MODEL_TIMEOUT_MS', source),
     poseModelFrames: readPositiveInteger('POSE_MODEL_FRAMES', source),
