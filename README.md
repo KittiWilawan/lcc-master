@@ -16,6 +16,7 @@ npm start
 - [คู่มือใช้งานภาษาไทย](./USER_GUIDE_TH.md)
 - [Use Cases](./USE_CASES.md)
 - [รายงานผลทดสอบล่าสุด](./TEST_REPORT.md)
+- [รายงานฝึกและทดสอบ AI ข้ามชุดข้อมูล](./AI_MULTIDATASET_REPORT_TH.md)
 
 ## คำสั่งตรวจระบบ
 

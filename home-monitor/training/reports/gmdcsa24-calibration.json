@@ -1,0 +1,87 @@
+{
+  "selection_rule": "maximize worst per-dataset validation balance, then worst F1",
+  "original_threshold": 0.83,
+  "selected_threshold": 0.86,
+  "validation": {
+    "Figshare2017": {
+      "videos": 364,
+      "true_positive": 183,
+      "true_negative": 174,
+      "false_positive": 3,
+      "false_negative": 4,
+      "accuracy": 0.9807692307692307,
+      "precision": 0.9838709677419355,
+      "recall": 0.9786096256684492,
+      "specificity": 0.9830508474576272,
+      "f1": 0.9812332439678284,
+      "roc_auc": 0.9969485482945104
+    },
+    "GMDCSA24": {
+      "videos": 43,
+      "true_positive": 20,
+      "true_negative": 21,
+      "false_positive": 1,
+      "false_negative": 1,
+      "accuracy": 0.9534883720930233,
+      "precision": 0.9523809523809523,
+      "recall": 0.9523809523809523,
+      "specificity": 0.9545454545454546,
+      "f1": 0.9523809523809523,
+      "roc_auc": 0.9567099567099566
+    },
+    "combined": {
+      "videos": 407,
+      "true_positive": 203,
+      "true_negative": 195,
+      "false_positive": 4,
+      "false_negative": 5,
+      "accuracy": 0.9778869778869779,
+      "precision": 0.9806763285024155,
+      "recall": 0.9759615384615384,
+      "specificity": 0.9798994974874372,
+      "f1": 0.9783132530120482,
+      "roc_auc": 0.9936944337069965
+    }
+  },
+  "test": {
+    "Figshare2017": {
+      "videos": 462,
+      "true_positive": 203,
+      "true_negative": 238,
+      "false_positive": 14,
+      "false_negative": 7,
+      "accuracy": 0.9545454545454546,
+      "precision": 0.9354838709677419,
+      "recall": 0.9666666666666667,
+      "specificity": 0.9444444444444444,
+      "f1": 0.9508196721311475,
+      "roc_auc": 0.988114134542706
+    },
+    "GMDCSA24": {
+      "videos": 37,
+      "true_positive": 17,
+      "true_negative": 14,
+      "false_positive": 6,
+      "false_negative": 0,
+      "accuracy": 0.8378378378378378,
+      "precision": 0.7391304347826086,
+      "recall": 1.0,
+      "specificity": 0.7,
+      "f1": 0.85,
+      "roc_auc": 0.8823529411764706
+    },
+    "combined": {
+      "videos": 499,
+      "true_positive": 220,
+      "true_negative": 252,
+      "false_positive": 20,
+      "false_negative": 7,
+      "accuracy": 0.9458917835671342,
+      "precision": 0.9166666666666666,
+      "recall": 0.9691629955947136,
+      "specificity": 0.9264705882352942,
+      "f1": 0.9421841541755889,
+      "roc_auc": 0.982524617776626
+    }
+  }
+}

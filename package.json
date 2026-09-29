@@ -53,6 +53,7 @@
   "scripts": {
     "start": "expo start",
     "test": "node --test home-monitor/*.test.mjs",
+    "test:training": "python -m unittest discover -s home-monitor/training -p test_*.py -v",
     "monitor:home": "node --env-file=home-monitor/.env home-monitor/worker.mjs",
     "monitor:pose": "node --env-file=home-monitor/.env home-monitor/pose-service-launcher.mjs",
     "monitor:start": "node --env-file=home-monitor/.env home-monitor/start-monitoring.mjs",
