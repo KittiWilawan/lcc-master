@@ -295,7 +295,7 @@ export default function DashboardScreen() {
   const handleTestCamera = async () => {
     setCameraTest({ state: 'testing', message: 'กำลังรับภาพจากกล้อง...' });
     try {
-      const result = await testCameraConnection(newCamUrl, newSnapshotUrl);
+      const result = await testCameraConnection(newCamUrl, newSnapshotUrl, Platform.OS === 'web');
       setCameraTest({ state: result.success ? 'success' : 'error', message: result.message });
     } catch (error) {
       setCameraTest({ state: 'error', message: getFriendlyErrorMessage(error, 'ทดสอบกล้องไม่สำเร็จ กรุณาลองอีกครั้ง') });
@@ -1129,6 +1129,14 @@ export default function DashboardScreen() {
                 <Text style={{ fontSize: 10, color: '#64748b', marginTop: -6, marginBottom: 12 }}>
                   ใส่ HLS (.m3u8) หรือ MJPEG เพียงช่องเดียว ระบบจะดึงภาพให้ AI อัตโนมัติ
                 </Text>
+                {Platform.OS !== 'web' ? (
+                  <View style={styles.cameraAddressTip}>
+                    <MaterialCommunityIcons name="wifi" size={18} color="#1d4ed8" />
+                    <Text style={styles.cameraAddressTipText}>
+                      กล้องอยู่บนคอม: ใช้ IP ของคอม เช่น 192.168.1.25 แทน localhost และต่อ Wi-Fi วงเดียวกัน
+                    </Text>
+                  </View>
+                ) : null}
                 <TouchableOpacity
                   style={styles.advancedCameraButton}
                   onPress={() => setShowAdvancedCamera((current) => !current)}
@@ -1477,6 +1485,25 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     marginBottom: 10,
+  },
+  cameraAddressTip: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8,
+    marginBottom: 12,
+  },
+  cameraAddressTipText: {
+    flex: 1,
+    color: '#1e3a8a',
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '600',
   },
   advancedCameraButton: {
     minHeight: 46,

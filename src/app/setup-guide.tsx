@@ -125,7 +125,7 @@ export default function SetupGuideScreen() {
   const sharePairingCode = async () => {
     if (!pairingCode) return;
     await Share.share({
-      message: `รหัสเชื่อมคอม LookLanCare: ${pairingCode.code}\nที่คอม เปิดโฟลเดอร์โปรเจกต์แล้วใช้คำสั่ง npm run monitor:pair`,
+      message: `รหัสเชื่อมคอม LookLanCare: ${pairingCode.code}\nที่คอม ดับเบิลคลิกไฟล์ Start LookLanCare Hub.cmd แล้วกรอกรหัสนี้`,
     });
   };
 

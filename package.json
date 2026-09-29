@@ -1,7 +1,7 @@
 {
   "name": "llc",
   "main": "expo-router/entry",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "dependencies": {
     "@expo/ui": "~57.0.21",
     "@expo/vector-icons": "^15.0.2",
@@ -56,6 +56,7 @@
     "monitor:home": "node --env-file=home-monitor/.env home-monitor/worker.mjs",
     "monitor:pose": "node --env-file=home-monitor/.env home-monitor/pose-service-launcher.mjs",
     "monitor:start": "node --env-file=home-monitor/.env home-monitor/start-monitoring.mjs",
+    "monitor:hub": "node --env-file=home-monitor/.env home-monitor/hub.mjs",
     "monitor:doctor": "node --env-file=home-monitor/.env home-monitor/doctor.mjs",
     "monitor:pair": "node --env-file=home-monitor/.env home-monitor/pair-device.mjs",
     "monitor:credentials": "powershell -NoProfile -ExecutionPolicy Bypass -File home-monitor/set-credentials.ps1",

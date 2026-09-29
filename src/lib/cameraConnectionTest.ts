@@ -3,6 +3,20 @@ export interface CameraConnectionResult {
   message: string;
 }
 
+const computerOnlyHosts = new Set(['localhost', '127.0.0.1', '[::1]', '::1', '0.0.0.0']);
+
+export function getCameraAddressIssue(source: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(source.trim());
+  } catch {
+    return null;
+  }
+
+  if (!computerOnlyHosts.has(parsed.hostname.toLowerCase())) return null;
+  return 'ลิงก์ localhost เปิดได้เฉพาะอุปกรณ์เครื่องนั้น บนมือถือให้เปลี่ยน localhost เป็น IP ของคอม เช่น 192.168.1.25 และเชื่อม Wi-Fi วงเดียวกัน';
+}
+
 function getTimeoutMs(): number {
   const timeoutMs = Number(process.env.EXPO_PUBLIC_CAMERA_TEST_TIMEOUT_MS);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
@@ -11,7 +25,10 @@ function getTimeoutMs(): number {
   return timeoutMs;
 }
 
-export async function testSnapshotConnection(snapshotUrl: string): Promise<CameraConnectionResult> {
+export async function testSnapshotConnection(
+  snapshotUrl: string,
+  allowComputerOnlyAddress = false,
+): Promise<CameraConnectionResult> {
   const source = snapshotUrl.trim();
   if (!source) return { success: false, message: 'กรุณากรอกลิงก์ภาพนิ่งจากกล้อง' };
 
@@ -23,6 +40,10 @@ export async function testSnapshotConnection(snapshotUrl: string): Promise<Camer
   }
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
     return { success: false, message: 'ลิงก์ต้องขึ้นต้นด้วย http:// หรือ https://' };
+  }
+  if (!allowComputerOnlyAddress) {
+    const addressIssue = getCameraAddressIssue(source);
+    if (addressIssue) return { success: false, message: addressIssue };
   }
 
   const controller = new AbortController();
@@ -57,8 +78,11 @@ export async function testSnapshotConnection(snapshotUrl: string): Promise<Camer
 export async function testCameraConnection(
   cameraUrl: string,
   optionalSnapshotUrl = '',
+  allowComputerOnlyAddress = false,
 ): Promise<CameraConnectionResult> {
-  if (optionalSnapshotUrl.trim()) return testSnapshotConnection(optionalSnapshotUrl);
+  if (optionalSnapshotUrl.trim()) {
+    return testSnapshotConnection(optionalSnapshotUrl, allowComputerOnlyAddress);
+  }
   const source = cameraUrl.trim();
   if (!source) return { success: false, message: 'กรุณากรอกลิงก์กล้อง' };
   let parsed: URL;
@@ -69,6 +93,10 @@ export async function testCameraConnection(
   }
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
     return { success: false, message: 'ลิงก์ต้องขึ้นต้นด้วย http:// หรือ https://' };
+  }
+  if (!allowComputerOnlyAddress) {
+    const addressIssue = getCameraAddressIssue(source);
+    if (addressIssue) return { success: false, message: addressIssue };
   }
 
   const controller = new AbortController();

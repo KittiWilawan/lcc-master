@@ -29,13 +29,11 @@ node --test home-monitor/core.test.mjs home-monitor/cloud.test.mjs
 ระบบตรวจจับบนคอมบ้าน:
 
 ```powershell
-npm run monitor:credentials
-npm run monitor:doctor
-npm run monitor:camera-check -- http://ที่อยู่กล้อง/snapshot.jpg
-npm run monitor:model-check -- D:\ภาพทดสอบ\normal.jpg
-npm run monitor:start
+npm run monitor:hub
 ```
 
-คำสั่ง `monitor:credentials` ตรวจบัญชีและให้เลือกครอบครัวที่ถูกต้องเป็นหมายเลขโดยอัตโนมัติ จึงไม่ต้องคัดลอก Family ID เอง
+บน Windows สามารถดับเบิลคลิก `Start LookLanCare Hub.cmd` แทนการพิมพ์คำสั่งได้ ครั้งแรกให้สร้างรหัสเชื่อมคอมในหน้า **ตรวจความพร้อม** ของแอป แล้วกรอกรหัสในหน้าต่าง Hub ระบบจะตรวจความพร้อมและเปิด AI ให้เอง
 
-ดูขั้นตอนตั้งค่ากล้อง บัญชีคอมบ้าน และ Ollama ในคู่มือภาษาไทยก่อนเปิดใช้งานจริง
+กล้อง HLS หรือ MJPEG ใช้ URL ช่องเดียวได้ URL ภาพนิ่งเป็นตัวเลือกเพิ่มเติม หาก URL มาจากคอม ให้ใช้ IP ของคอมแทน `localhost` บนมือถือ
+
+ดูขั้นตอนตั้งค่ากล้อง เชื่อมคอมบ้าน และติดตั้งโมเดลในคู่มือภาษาไทยก่อนเปิดใช้งานจริง
