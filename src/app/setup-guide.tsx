@@ -1,10 +1,12 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -14,6 +16,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../context/ThemeContext';
 import { checkSystemReadiness, ReadinessStep, SystemReadiness } from '../lib/systemReadiness';
 import { registerForPushNotificationsAsync, sendLocalTestNotification } from '../lib/pushNotifications';
+import {
+  canManageMonitorDevices,
+  createMonitorPairingCode,
+  listMonitorDevices,
+  MonitorDevice,
+  MonitorPairingCode,
+  revokeMonitorDevice,
+} from '../lib/monitorDevices';
 
 const ICONS: Record<ReadinessStep['id'], keyof typeof MaterialCommunityIcons.glyphMap> = {
   account: 'account-check-outline',
@@ -33,18 +43,51 @@ export default function SetupGuideScreen() {
   const [checking, setChecking] = useState(true);
   const [testingNotification, setTestingNotification] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [familyId, setFamilyId] = useState('');
+  const [devices, setDevices] = useState<MonitorDevice[]>([]);
+  const [canManageDevices, setCanManageDevices] = useState(false);
+  const [loadingDevices, setLoadingDevices] = useState(true);
+  const [deviceError, setDeviceError] = useState('');
+  const [creatingPairing, setCreatingPairing] = useState(false);
+  const [pairingCode, setPairingCode] = useState<MonitorPairingCode | null>(null);
+
+  const loadMonitorDevices = useCallback(async () => {
+    setLoadingDevices(true);
+    setDeviceError('');
+    try {
+      const storedFamilyId = await AsyncStorage.getItem('familyId');
+      setFamilyId(storedFamilyId ?? '');
+      if (!storedFamilyId) {
+        setDevices([]);
+        setCanManageDevices(false);
+        return;
+      }
+      const [availableDevices, mayManage] = await Promise.all([
+        listMonitorDevices(storedFamilyId),
+        canManageMonitorDevices(storedFamilyId),
+      ]);
+      setDevices(availableDevices.filter((device) => !device.revoked_at));
+      setCanManageDevices(mayManage);
+    } catch {
+      setDeviceError('ยังอ่านสถานะคอมไม่ได้ กรุณาตรวจอินเทอร์เน็ตแล้วลองอีกครั้ง');
+    } finally {
+      setLoadingDevices(false);
+    }
+  }, []);
 
   const runCheck = useCallback(async () => {
     setChecking(true);
     setErrorMessage('');
     try {
-      setResult(await checkSystemReadiness());
+      const readiness = await checkSystemReadiness();
+      setResult(readiness);
     } catch {
       setErrorMessage('ตรวจสอบระบบไม่สำเร็จ กรุณาตรวจอินเทอร์เน็ตแล้วลองอีกครั้ง');
     } finally {
       setChecking(false);
     }
-  }, []);
+    await loadMonitorDevices();
+  }, [loadMonitorDevices]);
 
   useFocusEffect(useCallback(() => {
     void runCheck();
@@ -66,6 +109,56 @@ export default function SetupGuideScreen() {
   };
 
   const progress = result?.progress ?? 0;
+
+  const createPairingCode = async () => {
+    if (!familyId || !canManageDevices) return;
+    setCreatingPairing(true);
+    try {
+      setPairingCode(await createMonitorPairingCode(familyId));
+    } catch {
+      Alert.alert('สร้างรหัสไม่สำเร็จ', 'กรุณาตรวจอินเทอร์เน็ตและสิทธิ์เจ้าของครอบครัว แล้วลองอีกครั้ง');
+    } finally {
+      setCreatingPairing(false);
+    }
+  };
+
+  const sharePairingCode = async () => {
+    if (!pairingCode) return;
+    await Share.share({
+      message: `รหัสเชื่อมคอม LookLanCare: ${pairingCode.code}\nที่คอม เปิดโฟลเดอร์โปรเจกต์แล้วใช้คำสั่ง npm run monitor:pair`,
+    });
+  };
+
+  const removeDevice = (device: MonitorDevice) => {
+    Alert.alert(
+      'ยกเลิกการเชื่อมต่อคอม',
+      `ต้องการยกเลิก “${device.name}” ใช่ไหม คอมเครื่องนี้จะหยุดส่งผลตรวจเข้าครอบครัว`,
+      [
+        { text: 'กลับ', style: 'cancel' },
+        {
+          text: 'ยกเลิกการเชื่อมต่อ',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              try {
+                await revokeMonitorDevice(familyId, device.id);
+                setDevices((current) => current.filter((item) => item.id !== device.id));
+              } catch {
+                Alert.alert('ยกเลิกไม่สำเร็จ', 'กรุณาตรวจอินเทอร์เน็ตแล้วลองอีกครั้ง');
+              }
+            })();
+          },
+        },
+      ],
+    );
+  };
+
+  const deviceState = (device: MonitorDevice) => {
+    if (device.state === 'running') return { label: 'กำลังทำงาน', color: '#15803d', background: '#dcfce7' };
+    if (device.state === 'degraded') return { label: 'ต้องตรวจสอบ', color: '#b45309', background: '#fef3c7' };
+    if (device.state === 'idle') return { label: 'พร้อมรอใช้งาน', color: '#1d4ed8', background: '#dbeafe' };
+    return { label: 'หยุดทำงาน', color: '#b91c1c', background: '#fee2e2' };
+  };
 
   const testNotification = async () => {
     setTestingNotification(true);
@@ -217,6 +310,104 @@ export default function SetupGuideScreen() {
           </View>
         </TouchableOpacity>
 
+        <View style={[styles.computerCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+          <View style={styles.computerHeader}>
+            <View style={[styles.computerIcon, { backgroundColor: colors.accentBg }]}>
+              <MaterialCommunityIcons name="desktop-tower-monitor" size={26} color={colors.accentText} />
+            </View>
+            <View style={styles.computerHeaderText}>
+              <Text style={[styles.computerTitle, { color: colors.textPrimary }]}>คอมที่ใช้ตรวจภาพ</Text>
+              <Text style={[styles.computerSubtitle, { color: colors.textSecondary }]}>เชื่อมคอมที่เปิดค้างไว้เพื่อให้ AI ตรวจภาพจากกล้อง</Text>
+            </View>
+          </View>
+
+          {loadingDevices ? (
+            <View style={styles.computerLoading}>
+              <ActivityIndicator color={colors.accentText} />
+              <Text style={[styles.computerLoadingText, { color: colors.textSecondary }]}>กำลังตรวจคอมที่เชื่อมไว้...</Text>
+            </View>
+          ) : !familyId ? (
+            <View style={[styles.computerNotice, { backgroundColor: colors.accentBg }]}>
+              <Text style={[styles.computerNoticeText, { color: colors.accentText }]}>สร้างหรือเข้าร่วมครอบครัวก่อน แล้วจึงเชื่อมคอมได้</Text>
+            </View>
+          ) : deviceError ? (
+            <View style={styles.deviceErrorRow}>
+              <MaterialCommunityIcons name="alert-circle-outline" size={20} color="#b91c1c" />
+              <Text style={styles.deviceErrorText}>{deviceError}</Text>
+            </View>
+          ) : (
+            <>
+              {devices.length ? (
+                <View style={styles.deviceList}>
+                  {devices.map((device) => {
+                    const state = deviceState(device);
+                    return (
+                      <View key={device.id} style={[styles.deviceRow, { borderColor: colors.cardBorder }]}>
+                        <View style={styles.deviceDetails}>
+                          <Text style={[styles.deviceName, { color: colors.textPrimary }]}>{device.name}</Text>
+                          <View style={styles.deviceMetaRow}>
+                            <View style={[styles.deviceBadge, { backgroundColor: state.background }]}>
+                              <Text style={[styles.deviceBadgeText, { color: state.color }]}>{state.label}</Text>
+                            </View>
+                            <Text style={[styles.deviceCount, { color: colors.textSecondary }]}>กล้อง {device.camera_count} ตัว</Text>
+                          </View>
+                          {device.detail ? <Text style={[styles.deviceDetail, { color: colors.textSecondary }]}>{device.detail}</Text> : null}
+                        </View>
+                        {canManageDevices ? (
+                          <TouchableOpacity
+                            style={styles.removeDeviceButton}
+                            onPress={() => removeDevice(device)}
+                            accessibilityRole="button"
+                            accessibilityLabel={`ยกเลิกการเชื่อมต่อ ${device.name}`}
+                          >
+                            <MaterialCommunityIcons name="link-off" size={22} color="#b91c1c" />
+                          </TouchableOpacity>
+                        ) : null}
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : (
+                <View style={[styles.computerNotice, { backgroundColor: colors.accentBg }]}>
+                  <Text style={[styles.computerNoticeTitle, { color: colors.textPrimary }]}>ยังไม่มีคอมที่เชื่อมต่อ</Text>
+                  <Text style={[styles.computerNoticeText, { color: colors.textSecondary }]}>เจ้าของครอบครัวสามารถสร้างรหัสแล้วนำไปกรอกที่คอมได้</Text>
+                </View>
+              )}
+
+              {pairingCode ? (
+                <View style={styles.pairingBox}>
+                  <Text style={styles.pairingLabel}>รหัสเชื่อมต่อคอม</Text>
+                  <Text selectable style={styles.pairingCode}>{pairingCode.code}</Text>
+                  <Text style={styles.pairingExpiry}>
+                    ใช้รหัสนี้ก่อน {new Date(pairingCode.expiresAt).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น.
+                  </Text>
+                  <TouchableOpacity style={styles.shareButton} onPress={() => void sharePairingCode()} accessibilityRole="button">
+                    <MaterialCommunityIcons name="share-variant-outline" size={20} color="#065f46" />
+                    <Text style={styles.shareButtonText}>ส่งรหัสไปที่คอม</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
+              {canManageDevices ? (
+                <TouchableOpacity
+                  style={[styles.pairButton, creatingPairing && styles.checkButtonDisabled]}
+                  onPress={() => void createPairingCode()}
+                  disabled={creatingPairing}
+                  accessibilityRole="button"
+                  accessibilityLabel="สร้างรหัสเชื่อมต่อคอมเครื่องใหม่"
+                >
+                  {creatingPairing
+                    ? <ActivityIndicator color="#ffffff" />
+                    : <MaterialCommunityIcons name="link-plus" size={22} color="#ffffff" />}
+                  <Text style={styles.pairButtonText}>{pairingCode ? 'สร้างรหัสใหม่' : 'เชื่อมต่อคอมเครื่องใหม่'}</Text>
+                </TouchableOpacity>
+              ) : (
+                <Text style={[styles.ownerOnlyText, { color: colors.textSecondary }]}>เจ้าของครอบครัวเป็นผู้เชื่อมต่อหรือยกเลิกคอม</Text>
+              )}
+            </>
+          )}
+        </View>
+
         {result?.ready ? (
           <TouchableOpacity style={styles.homeButton} onPress={() => router.replace('/home')}>
             <Text style={styles.homeButtonText}>ไปหน้าหลักและเริ่มดูแล</Text>
@@ -277,6 +468,38 @@ const styles = StyleSheet.create({
   notificationButtonText: { flex: 1 },
   notificationButtonTitle: { fontSize: 14, fontWeight: '900' },
   notificationButtonSubtitle: { fontSize: 11, lineHeight: 17, marginTop: 2 },
+  computerCard: { borderRadius: 20, borderWidth: 1, padding: 16, gap: 14 },
+  computerHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  computerIcon: { width: 48, height: 48, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  computerHeaderText: { flex: 1 },
+  computerTitle: { fontSize: 17, fontWeight: '900' },
+  computerSubtitle: { fontSize: 12, lineHeight: 18, marginTop: 3 },
+  computerLoading: { minHeight: 64, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
+  computerLoadingText: { fontSize: 12 },
+  computerNotice: { borderRadius: 14, padding: 14 },
+  computerNoticeTitle: { fontSize: 14, fontWeight: '900' },
+  computerNoticeText: { fontSize: 12, lineHeight: 18, marginTop: 3 },
+  deviceErrorRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderRadius: 14, backgroundColor: '#fef2f2', padding: 13 },
+  deviceErrorText: { flex: 1, color: '#b91c1c', fontSize: 12, lineHeight: 18 },
+  deviceList: { gap: 10 },
+  deviceRow: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 14, padding: 13, gap: 8 },
+  deviceDetails: { flex: 1 },
+  deviceName: { fontSize: 14, fontWeight: '900' },
+  deviceMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 7 },
+  deviceBadge: { borderRadius: 99, paddingHorizontal: 9, paddingVertical: 4 },
+  deviceBadgeText: { fontSize: 10, fontWeight: '800' },
+  deviceCount: { fontSize: 11, fontWeight: '700' },
+  deviceDetail: { fontSize: 11, lineHeight: 17, marginTop: 6 },
+  removeDeviceButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  pairingBox: { borderRadius: 16, backgroundColor: '#ecfdf5', borderWidth: 1, borderColor: '#6ee7b7', padding: 16, alignItems: 'center' },
+  pairingLabel: { color: '#065f46', fontSize: 12, fontWeight: '800' },
+  pairingCode: { color: '#064e3b', fontSize: 34, letterSpacing: 6, fontWeight: '900', marginTop: 6 },
+  pairingExpiry: { color: '#047857', fontSize: 11, marginTop: 5 },
+  shareButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, marginTop: 10, paddingHorizontal: 14 },
+  shareButtonText: { color: '#065f46', fontSize: 13, fontWeight: '900' },
+  pairButton: { minHeight: 52, borderRadius: 15, backgroundColor: '#059669', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, paddingHorizontal: 16 },
+  pairButtonText: { color: '#ffffff', fontSize: 14, fontWeight: '900' },
+  ownerOnlyText: { fontSize: 11, lineHeight: 17, textAlign: 'center' },
   homeButton: { minHeight: 52, borderRadius: 16, backgroundColor: '#d1fae5', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 16 },
   homeButtonText: { color: '#065f46', fontSize: 15, fontWeight: '900' },
   helpCard: { borderRadius: 16, padding: 15, flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
