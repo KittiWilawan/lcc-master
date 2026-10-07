@@ -1,0 +1,10 @@
+{
+  "deviceTokenDays": 30,
+  "maxImageBytes": 1048576,
+  "maxBodyBytes": 1500000,
+  "maxTextLength": 1000,
+  "eventLeaseSeconds": 60,
+  "requestTimeoutMs": 15000,
+  "pushUrl": "https://exp.host/--/api/v2/push/send",
+  "pushChannel": "emergency-fall-channel"
+}

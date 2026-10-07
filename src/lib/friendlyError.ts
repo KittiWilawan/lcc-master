@@ -1,11 +1,11 @@
 interface ErrorLike {
+  name?: unknown;
   message?: unknown;
   code?: unknown;
   status?: unknown;
 }
 
 function readError(error: unknown): ErrorLike {
-  if (error instanceof Error) return { message: error.message };
   if (typeof error === 'object' && error !== null) return error as ErrorLike;
   return {};
 }
@@ -17,6 +17,16 @@ export function getFriendlyErrorMessage(
   const details = readError(error);
   const message = typeof details.message === 'string' ? details.message.toLowerCase() : '';
   const code = typeof details.code === 'string' ? details.code.toLowerCase() : '';
+
+  if (details.name === 'TimeoutError' || details.name === 'AbortError') {
+    return 'ระบบตอบกลับช้าเกินไป กรุณาลองอีกครั้งเมื่อการเชื่อมต่อพร้อม';
+  }
+  if (typeof details.status === 'number' && details.status >= 500) {
+    return 'ระบบส่วนกลางไม่พร้อมชั่วคราว กรุณารอสักครู่แล้วลองอีกครั้ง';
+  }
+  if (details.name === 'AuthRetryableFetchError') {
+    return 'ติดต่อระบบบัญชีไม่ได้ กรุณาตรวจการเชื่อมต่อแล้วลองอีกครั้ง';
+  }
 
   if (message.includes('network') || message.includes('fetch') || message.includes('timeout')) {
     return 'เชื่อมต่อระบบไม่ได้ กรุณาตรวจอินเทอร์เน็ตแล้วลองอีกครั้ง';
@@ -32,9 +42,6 @@ export function getFriendlyErrorMessage(
   }
   if (message.includes('storage') || message.includes('upload')) {
     return 'บันทึกรูปไม่สำเร็จ กรุณาตรวจอินเทอร์เน็ตและลองใช้รูปใหม่';
-  }
-  if (typeof details.status === 'number' && details.status >= 500) {
-    return 'ระบบส่วนกลางไม่พร้อมชั่วคราว กรุณารอสักครู่แล้วลองอีกครั้ง';
   }
   return fallback;
 }

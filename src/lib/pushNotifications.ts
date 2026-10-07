@@ -5,6 +5,7 @@ import { supabase } from './supabase';
 import { getEmergencyPhoneNumber } from './phone';
 
 export const STORAGE_KEY_EXPO_PUSH_TOKEN = '@expo_push_token';
+export const STORAGE_KEY_PUSH_REGISTRATION = '@push_registration_status';
 
 // Detect if running inside Expo Go store client
 const isExpoGo =
@@ -65,7 +66,7 @@ export async function registerForPushNotificationsAsync(): Promise<boolean> {
           importance: Notifications.AndroidImportance?.MAX ?? 5,
           vibrationPattern: [0, 250, 250, 250],
           lightColor: '#EF4444',
-          lockscreenVisibility: Notifications.AndroidNotificationVisibility?.PUBLIC ?? 1,
+          lockscreenVisibility: Notifications.AndroidNotificationVisibility?.PRIVATE ?? 0,
         });
       } catch (err) {
         console.log('setNotificationChannelAsync notice:', err);
@@ -94,10 +95,12 @@ export async function registerForPushNotificationsAsync(): Promise<boolean> {
     }
 
     if (finalStatus !== 'granted') {
+      await AsyncStorage.setItem(STORAGE_KEY_PUSH_REGISTRATION, 'permission_denied');
       return false;
     }
 
     // Get and save Expo Push Token
+    await AsyncStorage.setItem(STORAGE_KEY_PUSH_REGISTRATION, 'local_only');
     try {
       if (typeof Notifications.getExpoPushTokenAsync === 'function') {
         const projectId = Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
@@ -105,12 +108,14 @@ export async function registerForPushNotificationsAsync(): Promise<boolean> {
         const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
         const token = tokenData?.data;
         if (token) {
-          await AsyncStorage.setItem(STORAGE_KEY_EXPO_PUSH_TOKEN, token);
           await syncPushTokenToSupabase(token);
+          await AsyncStorage.setItem(STORAGE_KEY_EXPO_PUSH_TOKEN, token);
+          await AsyncStorage.setItem(STORAGE_KEY_PUSH_REGISTRATION, 'remote_ready');
         }
       }
-    } catch (err) {
-      console.log('Push token retrieval notice:', err);
+    } catch {
+      await AsyncStorage.removeItem(STORAGE_KEY_EXPO_PUSH_TOKEN);
+      console.warn('รับแจ้งเตือนจากเครื่องอื่นยังไม่พร้อม · การเตือนบนเครื่องนี้ยังใช้ได้');
     }
 
     return true;
@@ -124,17 +129,13 @@ export async function registerForPushNotificationsAsync(): Promise<boolean> {
  * Sync push token to Supabase profiles table
  */
 export async function syncPushTokenToSupabase(token: string): Promise<void> {
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.user) {
-      await supabase
-        .from('profiles')
-        .update({ expo_push_token: token })
-        .eq('id', session.user.id);
-    }
-  } catch (e) {
-    console.log('Error syncing token to Supabase:', e);
-  }
+  const { data: { session }, error: authError } = await supabase.auth.getSession();
+  if (authError) throw authError;
+  if (!session?.user) throw new Error('กรุณาเข้าสู่ระบบก่อนลงทะเบียนรับแจ้งเตือน');
+  const { data, error } = await supabase.from('profiles').update({ expo_push_token: token })
+    .eq('id', session.user.id).select('id').maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error('ยังไม่มีโปรไฟล์สำหรับรับแจ้งเตือน');
 }
 
 /**

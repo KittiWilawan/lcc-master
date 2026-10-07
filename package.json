@@ -1,7 +1,7 @@
 {
   "name": "llc",
   "main": "expo-router/entry",
-  "version": "1.0.3",
+  "version": "1.0.6",
   "dependencies": {
     "@expo/ui": "~57.0.21",
     "@expo/vector-icons": "^15.0.2",
@@ -52,7 +52,7 @@
   },
   "scripts": {
     "start": "expo start",
-    "test": "node --test home-monitor/*.test.mjs",
+    "test": "node --test home-monitor/*.test.mjs tests/*.test.mjs",
     "test:training": "python -m unittest discover -s home-monitor/training -p test_*.py -v",
     "monitor:home": "node --env-file=home-monitor/.env home-monitor/worker.mjs",
     "monitor:pose": "node --env-file=home-monitor/.env home-monitor/pose-service-launcher.mjs",

@@ -2,6 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
 import { decode } from 'base64-arraybuffer';
 import { v4 as uuidv4 } from 'uuid';
+import runtime from '../../android/app/src/main/assets/monitoring/runtime.json';
+import { File } from 'expo-file-system';
 
 export interface FallEvidenceRecord {
   id: string;
@@ -16,6 +18,8 @@ export interface FallEvidenceRecord {
   status: 'pending' | 'notified' | 'responded' | 'cancelled';
   resolution_deadline?: string;
   created_at: string;
+  cloudSynced?: boolean;
+  savedLocally?: boolean;
 }
 
 export const STORAGE_KEY_FALL_EVIDENCE = '@fall_evidence_records';
@@ -32,12 +36,11 @@ export async function uploadFallEvidenceImage(
     const isPng = imageUriOrBase64.startsWith('data:image/png;base64,');
     const isJpeg = imageUriOrBase64.startsWith('data:image/jpeg;base64,');
     const name = `${familyId}/${uuidv4()}.${isPng ? 'png' : 'jpg'}`;
-    let imageData: Blob | ArrayBuffer;
+    let imageData: ArrayBuffer;
     if (isPng || isJpeg) {
       imageData = decode(imageUriOrBase64.slice(imageUriOrBase64.indexOf(',') + 1));
     } else if (imageUriOrBase64.startsWith('file:')) {
-      const response = await fetch(imageUriOrBase64);
-      imageData = await response.blob();
+      imageData = await new File(imageUriOrBase64).arrayBuffer();
     } else {
       return null;
     }
@@ -72,35 +75,66 @@ export async function recordFallEvent(params: {
   groundDuration?: number;
   torsoAngle?: number;
   eventType?: 'actual' | 'simulated' | 'sos';
+  eventId?: string;
+  familyId?: string;
+  createdAt?: string;
+  notificationSent?: boolean;
+  deferCloudSync?: boolean;
+  cloudImagePath?: string;
 }): Promise<FallEvidenceRecord> {
-  const familyId = (await AsyncStorage.getItem('familyId')) || undefined;
+  const familyId = params.familyId || (await AsyncStorage.getItem('familyId')) || undefined;
   const memberName = params.memberName || 'ยังไม่ยืนยันตัวบุคคล';
   const cameraName = params.cameraName || 'กล้องวงจรปิด';
   const eventType = params.eventType || 'actual';
-  const createdAt = new Date().toISOString();
+  const createdAt = params.createdAt || new Date().toISOString();
 
-  const evidenceImage = params.imageUri && familyId
-    ? await uploadFallEvidenceImage(params.imageUri, familyId) || undefined
+  const existingData = await AsyncStorage.getItem(STORAGE_KEY_FALL_EVIDENCE);
+  const existing = params.eventId && existingData
+    ? (JSON.parse(existingData) as FallEvidenceRecord[]).find((record) => record.id === params.eventId && record.family_id === familyId)
     : undefined;
+  if (existing?.cloudSynced) return existing;
 
   const newRecord: FallEvidenceRecord = {
-    id: Date.now().toString(),
+    id: params.eventId || uuidv4(),
     family_id: familyId,
     member_name: memberName,
     camera_name: cameraName,
-    image_url: evidenceImage,
+    image_url: params.imageUri?.startsWith('file:') ? params.imageUri : undefined,
     details: params.details || `ตรวจพบการหกล้มที่ ${cameraName}`,
     ground_duration: params.groundDuration,
     torso_angle: params.torsoAngle,
     event_type: eventType,
-    status: 'notified',
+    status: params.notificationSent ? 'notified' : 'pending',
     created_at: createdAt,
   };
+
+  newRecord.savedLocally = await saveLocalRecord(newRecord);
+
+  if (params.deferCloudSync) {
+    if (params.cloudImagePath && familyId && params.eventId && params.cloudImagePath === `${familyId}/${params.eventId}.jpg`) {
+      newRecord.image_url = params.cloudImagePath;
+      newRecord.cloudSynced = true;
+      newRecord.savedLocally = await saveLocalRecord(newRecord);
+    }
+    return newRecord;
+  }
+
+  const uploadedImage = existing?.image_url && !existing.image_url.startsWith('file:') && !existing.image_url.startsWith('http')
+    ? existing.image_url : undefined;
+  const evidenceImage = uploadedImage || (params.imageUri && familyId
+    ? await uploadFallEvidenceImage(params.imageUri, familyId) || undefined
+    : undefined);
+  if (evidenceImage) {
+    newRecord.image_url = evidenceImage;
+    newRecord.savedLocally = await saveLocalRecord(newRecord);
+  }
 
   // Save to Supabase Cloud Database table 'fall_events'
   try {
     if (familyId) {
-      const { error } = await supabase.from('fall_events').insert({
+      if (params.imageUri && !evidenceImage) throw new Error('ภาพหลักฐานยังไม่ซิงก์');
+      const payload = {
+        id: newRecord.id,
         family_id: familyId,
         member_name: memberName,
         camera_name: cameraName,
@@ -110,24 +144,35 @@ export async function recordFallEvent(params: {
         torso_angle: newRecord.torso_angle,
         event_type: eventType,
         status: newRecord.status,
-      });
+        created_at: newRecord.created_at,
+      };
+      const { error } = params.eventId
+        ? await supabase.from('fall_events').upsert(payload, { onConflict: 'id', ignoreDuplicates: true })
+        : await supabase.from('fall_events').insert(payload);
       if (error) throw error;
+      newRecord.cloudSynced = true;
     }
-  } catch (e) {
-    console.log('Error writing fall event to Supabase:', e);
+  } catch {
+    console.warn('บันทึกเหตุไปยังฐานข้อมูลไม่ได้ เก็บเหตุไว้ในอุปกรณ์');
   }
 
   // Save to Local Storage fallback
-  try {
-    const localData = await AsyncStorage.getItem(STORAGE_KEY_FALL_EVIDENCE);
-    const list: FallEvidenceRecord[] = localData ? JSON.parse(localData) : [];
-    list.unshift(newRecord);
-    await AsyncStorage.setItem(STORAGE_KEY_FALL_EVIDENCE, JSON.stringify(list.slice(0, 30)));
-  } catch (e) {
-    console.log('Error saving local fall evidence:', e);
-  }
+  newRecord.savedLocally = await saveLocalRecord(newRecord);
 
   return newRecord;
+}
+
+let localWrites: Promise<unknown> = Promise.resolve();
+async function saveLocalRecord(record: FallEvidenceRecord): Promise<boolean> {
+  const write = localWrites.then(async () => {
+    const localData = await AsyncStorage.getItem(STORAGE_KEY_FALL_EVIDENCE);
+    const list: FallEvidenceRecord[] = localData ? JSON.parse(localData) : [];
+    const next = [record, ...list.filter((item) => item.id !== record.id)];
+    await AsyncStorage.setItem(STORAGE_KEY_FALL_EVIDENCE, JSON.stringify(next.slice(0, runtime.maxPendingEvents)));
+    return true;
+  }).catch(() => false);
+  localWrites = write;
+  return write;
 }
 
 /**
@@ -136,6 +181,11 @@ export async function recordFallEvent(params: {
 export async function getFallEvents(): Promise<FallEvidenceRecord[]> {
   const familyId = await AsyncStorage.getItem('familyId');
   if (!familyId) return [];
+  let local: FallEvidenceRecord[] = [];
+  try {
+    const value = await AsyncStorage.getItem(STORAGE_KEY_FALL_EVIDENCE);
+    local = (value ? JSON.parse(value) as FallEvidenceRecord[] : []).filter((record) => record.family_id === familyId);
+  } catch { console.warn('อ่านประวัติบนอุปกรณ์ไม่สำเร็จ'); }
   try {
     {
       const { data, error } = await supabase
@@ -143,10 +193,13 @@ export async function getFallEvents(): Promise<FallEvidenceRecord[]> {
         .select('*')
         .eq('family_id', familyId)
         .order('created_at', { ascending: false })
-        .limit(20);
+        .limit(runtime.maxPendingEvents);
 
       if (!error && data && data.length > 0) {
-        return await Promise.all((data as FallEvidenceRecord[]).map(signEvidenceUrl));
+        const merged = new Map(local.map((record) => [record.id, record]));
+        for (const record of data as FallEvidenceRecord[]) merged.set(record.id, record);
+        return await Promise.all([...merged.values()].sort((left, right) =>
+          Date.parse(right.created_at) - Date.parse(left.created_at)).map(signEvidenceUrl));
       }
     }
   } catch (e) {
@@ -155,9 +208,7 @@ export async function getFallEvents(): Promise<FallEvidenceRecord[]> {
 
   // Fallback to local storage
   try {
-    const localData = await AsyncStorage.getItem(STORAGE_KEY_FALL_EVIDENCE);
-    const records: FallEvidenceRecord[] = localData ? JSON.parse(localData) : [];
-    return await Promise.all(records.filter((record) => record.family_id === familyId).map(signEvidenceUrl));
+    return await Promise.all(local.map(signEvidenceUrl));
   } catch (e) {
     console.log('Error reading local fall evidence:', e);
     return [];
@@ -166,7 +217,7 @@ export async function getFallEvents(): Promise<FallEvidenceRecord[]> {
 
 async function signEvidenceUrl(record: FallEvidenceRecord): Promise<FallEvidenceRecord> {
   const imagePath = record.image_url;
-  if (!imagePath || imagePath.startsWith('http')) return record;
+  if (!imagePath || imagePath.startsWith('http') || imagePath.startsWith('file:')) return record;
   const ttl = Number(process.env.EXPO_PUBLIC_EVIDENCE_URL_TTL_SECONDS);
   if (!Number.isInteger(ttl) || ttl <= 0) return { ...record, image_url: undefined };
   const { data, error } = await supabase.storage.from('fall-evidence').createSignedUrl(imagePath, ttl);

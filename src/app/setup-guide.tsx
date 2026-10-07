@@ -31,7 +31,6 @@ const ICONS: Record<ReadinessStep['id'], keyof typeof MaterialCommunityIcons.gly
   recipient: 'account-heart-outline',
   identity: 'face-recognition',
   camera: 'cctv',
-  background: 'cellphone-lock',
   notification: 'bell-ring-outline',
 };
 
@@ -100,12 +99,7 @@ export default function SetupGuideScreen() {
     }
     if (step.route) {
       router.push(step.route);
-      return;
     }
-    Alert.alert(
-      'เปิดการเฝ้าระวังเบื้องหลัง',
-      'กลับไปหน้าหลัก รอจนขึ้นว่า AI กำลังเฝ้าระวังเบื้องหลัง แล้วจึงปิดหน้าจอได้'
-    );
   };
 
   const progress = result?.progress ?? 0;
@@ -212,7 +206,7 @@ export default function SetupGuideScreen() {
             <View style={styles.progressTextBlock}>
               <Text style={styles.progressEyebrow}>ความพร้อมของระบบ</Text>
               <Text style={styles.progressTitle}>
-                {result?.ready ? 'พร้อมเริ่มดูแลแล้ว' : `สำเร็จ ${result?.completedCount ?? 0} จาก ${result?.totalCount ?? 7} ขั้นตอน`}
+                {result?.ready ? 'พร้อมเริ่มดูแลแล้ว' : `สำเร็จ ${result?.completedCount ?? 0} จาก ${result?.totalCount ?? '…'} ขั้นตอน`}
               </Text>
             </View>
             <Text style={styles.progressPercent}>{progress}%</Text>
@@ -222,7 +216,7 @@ export default function SetupGuideScreen() {
           </View>
           <Text style={styles.progressHint}>
             {result?.ready
-              ? 'กล้อง การเฝ้าระวังเบื้องหลัง และการแจ้งเตือนพร้อมทำงาน'
+              ? 'กล้อง AI และการแจ้งเตือนพร้อมทำงาน'
               : 'แตะรายการที่ยังไม่พร้อมเพื่อไปตั้งค่าต่อ'}
           </Text>
         </View>
@@ -245,7 +239,7 @@ export default function SetupGuideScreen() {
         {checking && !result ? (
           <View style={styles.loadingCard}>
             <ActivityIndicator size="large" color={colors.accentText} />
-            <Text style={[styles.loadingText, { color: colors.textSecondary }]}>กำลังตรวจกล้อง ระบบเบื้องหลัง และการแจ้งเตือน...</Text>
+            <Text style={[styles.loadingText, { color: colors.textSecondary }]}>กำลังตรวจกล้อง AI และการแจ้งเตือน...</Text>
           </View>
         ) : (
           <View style={styles.stepList}>

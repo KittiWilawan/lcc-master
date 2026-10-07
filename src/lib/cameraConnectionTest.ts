@@ -1,3 +1,5 @@
+import { hasNativeCameraMonitoring, testNativeCameraSource } from './cameraMonitoring';
+
 export interface CameraConnectionResult {
   success: boolean;
   message: string;
@@ -80,7 +82,7 @@ export async function testCameraConnection(
   optionalSnapshotUrl = '',
   allowComputerOnlyAddress = false,
 ): Promise<CameraConnectionResult> {
-  if (optionalSnapshotUrl.trim()) {
+  if (optionalSnapshotUrl.trim() && !hasNativeCameraMonitoring()) {
     return testSnapshotConnection(optionalSnapshotUrl, allowComputerOnlyAddress);
   }
   const source = cameraUrl.trim();
@@ -99,6 +101,10 @@ export async function testCameraConnection(
     if (addressIssue) return { success: false, message: addressIssue };
   }
 
+  if (hasNativeCameraMonitoring() && process.env.EXPO_PUBLIC_AI_MODE !== 'home_worker') {
+    return testNativeCameraSource(source);
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), getTimeoutMs());
   try {
@@ -115,6 +121,9 @@ export async function testCameraConnection(
       contentType.startsWith('multipart/') || contentType.startsWith('image/') ||
       contentType.startsWith('application/octet-stream');
     await response.body?.cancel();
+    if (supported && process.env.EXPO_PUBLIC_AI_MODE !== 'home_worker') {
+      return { success: false, message: 'เปิดลิงก์ได้ แต่ต้องทดสอบการถอดภาพใน APK Android รุ่นล่าสุดก่อนใช้ตรวจล้ม' };
+    }
     return supported
       ? { success: true, message: 'เชื่อมกล้องสำเร็จ คอมสามารถดึงภาพให้ AI ได้' }
       : { success: false, message: 'ลิงก์ตอบกลับมา แต่ไม่พบภาพหรือวิดีโอที่รองรับ' };

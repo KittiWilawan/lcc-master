@@ -1,4 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { hasNativeCameraMonitoring } from '../lib/cameraMonitoring';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { Image } from 'expo-image';
@@ -181,7 +182,9 @@ export default function IdentityEnrollmentScreen() {
           <MaterialCommunityIcons name="account-search-outline" size={28} color={colors.accentText} />
           <View style={styles.infoCopy}>
             <Text style={[styles.infoTitle, { color: colors.textPrimary }]}>ใช้ในห้องที่มีหลายคน</Text>
-            <Text style={[styles.infoText, { color: colors.textSecondary }]}>AI จะเปรียบเทียบคนที่ล้มกับรูปเหล่านี้ ระบุชื่อเฉพาะเมื่อมั่นใจ หากถูกบังหรือภาพไม่ชัดจะแสดงว่ายังไม่ยืนยันตัวบุคคล</Text>
+            <Text style={[styles.infoText, { color: colors.textSecondary }]}>{hasNativeCameraMonitoring() && process.env.EXPO_PUBLIC_AI_MODE !== 'home_worker'
+              ? 'รูปเหล่านี้เก็บไว้ใช้อ้างอิง รุ่น AI บนอุปกรณ์ตรวจคนในพื้นที่กล้องที่เลือก และยังไม่ยืนยันชื่อจากรูป'
+              : 'รูปเหล่านี้ใช้ประกอบการตรวจสอบเหตุ ระบบจะแสดงว่ายังไม่ยืนยันตัวบุคคลจนกว่าจะมีผลเปรียบเทียบที่รองรับ'}</Text>
           </View>
         </View>
 

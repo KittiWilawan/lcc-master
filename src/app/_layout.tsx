@@ -92,6 +92,7 @@ export default function RootLayout() {
   if (isLocked) {
     return (
       <ThemeProvider>
+        <BackgroundMonitoringController session={session} />
         <AppLockScreen onUnlock={() => setIsLocked(false)} />
       </ThemeProvider>
     );

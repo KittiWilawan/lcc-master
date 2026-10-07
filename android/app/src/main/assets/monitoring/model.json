@@ -1,0 +1,16 @@
+{
+  "formatVersion": 2,
+  "modelAsset": "monitoring/fall_forest.bin",
+  "landmarkerAsset": "monitoring/pose_landmarker_lite.task",
+  "featureVariant": "temporal",
+  "framesPerWindow": 3,
+  "featureCount": 1242,
+  "landmarkCount": 33,
+  "visibilityThreshold": 0.35,
+  "normalizationMinScale": 0.05,
+  "fallThreshold": 0.45,
+  "sourceSha256": "06f5dde4dbc55a32abec25b0d8319934d09223ae83354f1c458cf2f32495e2ea",
+  "exportParityMaxError": 2.220446049250313e-16,
+  "validationScope": "Tree export parity only; Android streaming accuracy requires separate validation",
+  "trainingProtocol": "chronological_runtime_windows"
+}

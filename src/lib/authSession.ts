@@ -2,6 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { STORAGE_KEY_FALL_EVIDENCE } from './fallEvidence';
 import { supabase } from './supabase';
 import { stopBackgroundMonitoring } from './backgroundMonitoring';
+import { prepareNativeEventRevocation } from './nativeEventDelivery';
+import { STORAGE_KEY_EXPO_PUSH_TOKEN, STORAGE_KEY_PUSH_REGISTRATION } from './pushNotifications';
 
 const DEPRECATED_INTEGRATION_STORAGE_KEYS = [
   '@line_messaging_channel_token',
@@ -42,6 +44,8 @@ const SIGNED_IN_USER_STORAGE_KEYS = [
   STORAGE_KEY_FALL_EVIDENCE,
   '@app_lock_enabled',
   '@app_lock_pin',
+  STORAGE_KEY_EXPO_PUSH_TOKEN,
+  STORAGE_KEY_PUSH_REGISTRATION,
 ] as const;
 
 export async function clearSignedInUserStorage(): Promise<void> {
@@ -56,7 +60,14 @@ export async function clearDeprecatedIntegrationStorage(): Promise<void> {
 }
 
 export async function signOutCurrentDevice(): Promise<void> {
+  const revoke = await prepareNativeEventRevocation().catch(() => undefined);
   await stopBackgroundMonitoring().catch(() => false);
+  // Clear the local device permission immediately; revoke it on the server before ending the session.
+  if (revoke) await revoke().catch(() => undefined);
+  const { data } = await supabase.auth.getSession();
+  if (data.session?.user.id) {
+    await supabase.from('profiles').update({ expo_push_token: null }).eq('id', data.session.user.id);
+  }
   const { error } = await supabase.auth.signOut({ scope: 'local' });
   if (error) throw error;
 

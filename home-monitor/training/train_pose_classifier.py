@@ -5,9 +5,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-import cv2
 import joblib
-import mediapipe as mp
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
@@ -81,6 +79,9 @@ worker_pose = None
 
 
 def initialize_worker():
+    import cv2
+    import mediapipe as mp
+
     global worker_pose
     cv2.setNumThreads(1)
     worker_pose = mp.solutions.pose.Pose(
@@ -97,6 +98,8 @@ def extract_case(arguments):
 
 
 def extract_video_features(video_path, pose, frames_per_video):
+    import cv2
+
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")
@@ -167,9 +170,13 @@ def split_arrays(features, labels, splits, split):
     return features[selected], labels[selected]
 
 
-def evaluate(model, features, labels, threshold=0.5):
+def evaluate(model, features, labels, threshold=0.5, eligible_mask=None):
     probabilities = model.predict_proba(features)[:, 1]
     predictions = (probabilities >= threshold).astype(int)
+    if eligible_mask is not None:
+        if len(eligible_mask) != len(labels):
+            raise ValueError("eligible_mask must match the number of labels")
+        predictions = predictions & np.asarray(eligible_mask, dtype=int)
     tn, fp, fn, tp = confusion_matrix(labels, predictions, labels=[0, 1]).ravel()
     return {
         "videos": int(len(labels)),
@@ -182,14 +189,14 @@ def evaluate(model, features, labels, threshold=0.5):
         "recall": float(recall_score(labels, predictions, zero_division=0)),
         "specificity": float(tn / (tn + fp)) if tn + fp else None,
         "f1": float(f1_score(labels, predictions, zero_division=0)),
-        "roc_auc": float(roc_auc_score(labels, probabilities)),
+        "roc_auc": float(roc_auc_score(labels, probabilities)) if len(np.unique(labels)) > 1 else None,
     }
 
 
-def select_threshold(model, features, labels):
+def select_threshold(model, features, labels, eligible_mask=None):
     best = None
     for threshold in np.linspace(0.1, 0.9, 161):
-        metrics = evaluate(model, features, labels, float(threshold))
+        metrics = evaluate(model, features, labels, float(threshold), eligible_mask)
         score = (
             min(metrics["recall"], metrics["specificity"]),
             metrics["f1"],

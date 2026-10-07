@@ -38,7 +38,7 @@ import { describeMonitorHealth, loadMonitorHealth } from '../../lib/monitorHealt
 import { getFriendlyErrorMessage } from '../../lib/friendlyError';
 import { testCameraConnection } from '../../lib/cameraConnectionTest';
 import { callPhoneNumber, getEmergencyPhoneNumber } from '../../lib/phone';
-import { startBackgroundMonitoring, stopBackgroundMonitoring } from '../../lib/backgroundMonitoring';
+import { getNativeCameraCapabilities, hasNativeCameraMonitoring, isCameraMonitorReady, isCameraMonitorSlow, requestCameraMonitoringRefresh, useCameraMonitoringStates } from '../../lib/cameraMonitoring';
 import { getTrackedMemberIds, shouldMonitorCamera, usesAllPeopleMode } from '../../lib/monitoringPolicy';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -69,8 +69,7 @@ export default function DashboardScreen() {
   // Camera State
   const [cameras, setCameras] = useState<CameraItem[]>([]);
   const [loadingCameras, setLoadingCameras] = useState(true);
-  const [backgroundMonitoringActive, setBackgroundMonitoringActive] = useState(false);
-  const [backgroundMonitoringError, setBackgroundMonitoringError] = useState('');
+  const nativeCameraStates = useCameraMonitoringStates();
   const [fullscreenCam, setFullscreenCam] = useState<CameraItem | null>(null);
   const [activeAlertCamId, setActiveAlertCamId] = useState<string | null>(null);
   const [permission, requestPermission] = useCameraPermissions();
@@ -82,8 +81,9 @@ export default function DashboardScreen() {
   const [newSnapshotUrl, setNewSnapshotUrl] = useState('');
   const [showAdvancedCamera, setShowAdvancedCamera] = useState(false);
   const [assignedMemberId, setAssignedMemberId] = useState<string>('');
-  const [cameraTest, setCameraTest] = useState<{ state: 'idle' | 'testing' | 'success' | 'error'; message: string }>({ state: 'idle', message: '' });
+  const [cameraTest, setCameraTest] = useState<{ state: 'idle' | 'testing' | 'success' | 'error'; message: string; source?: string }>({ state: 'idle', message: '' });
   const [savingCamera, setSavingCamera] = useState(false);
+  const savingCameraRef = useRef(false);
   const [showFalseAlarmModal, setShowFalseAlarmModal] = useState(false);
   const [pendingFallInfo, setPendingFallInfo] = useState<{ camName?: string; personName?: string; imageUri?: string } | null>(null);
   const pendingAlertRef = useRef(false);
@@ -171,6 +171,7 @@ export default function DashboardScreen() {
   }, []);
 
   const handleAddCamera = async () => {
+    if (savingCameraRef.current) return;
     if (trackedCount > 0 && !assignedMemberId) {
       Alert.alert('เลือกผู้รับการดูแล', 'กล้องต้องมีผู้รับการดูแลหลัก เพื่อให้ข้อความแจ้งเตือนไม่ระบุชื่อผิดคน');
       return;
@@ -196,11 +197,11 @@ export default function DashboardScreen() {
         Alert.alert('URL ไม่ถูกต้อง', 'กรุณาระบุ URL ของสตรีมกล้อง');
         return;
       }
-      if (newCamType === 'video' && !newSnapshotUrl.trim()) {
+      if (newCamType === 'video' && homeWorkerMode && !newSnapshotUrl.trim()) {
         Alert.alert('ยังไม่มีภาพสำหรับ AI', 'วิดีโอทดสอบต้องมีลิงก์ภาพนิ่งสำหรับ AI');
         return;
       }
-      if (cameraTest.state !== 'success') {
+      if (cameraTest.state !== 'success' || cameraTest.source !== newCamUrl.trim()) {
         Alert.alert('กรุณาทดสอบกล้องก่อน', 'กด “ทดสอบการเชื่อมต่อ” และรอให้ขึ้นว่าพร้อมใช้งาน');
         return;
       }
@@ -227,6 +228,7 @@ export default function DashboardScreen() {
         }
       }
     }
+    if (savingCameraRef.current) return;
 
     let protocol: 'rtsp' | 'rtmp' | 'hls' | 'mp4' | 'unknown' = 'unknown';
     if (newCamType === 'rtsp') {
@@ -240,8 +242,15 @@ export default function DashboardScreen() {
 
     const cameraName = newCamName || (newCamType === 'device' ? 'กล้องมือถือ' : newCamType === 'rtsp' ? 'กล้องภายนอก' : 'วิดีโอ');
 
+    savingCameraRef.current = true;
     setSavingCamera(true);
     try {
+      if (newCamType !== 'device' && hasNativeCameraMonitoring() && !homeWorkerMode) {
+        const capability = await getNativeCameraCapabilities();
+        if (cameras.filter((camera) => camera.type !== 'device').length >= capability.maxCameras) {
+          throw new Error(`รุ่นนี้รองรับการตรวจพร้อมกัน ${capability.maxCameras} กล้อง กรุณาลบกล้องที่ไม่ได้ใช้ก่อน`);
+        }
+      }
       const familyId = await AsyncStorage.getItem('familyId');
       if (!familyId) throw new Error('กรุณาเข้าร่วมครอบครัวก่อนเพิ่มกล้อง');
       const { data, error } = await supabase
@@ -251,7 +260,7 @@ export default function DashboardScreen() {
             name: cameraName,
             type: newCamType,
             url: (newCamType === 'video' || newCamType === 'rtsp') ? newCamUrl : null,
-            snapshot_url: newSnapshotUrl.trim() || (newCamType === 'rtsp' ? newCamUrl.trim() : null),
+            snapshot_url: newSnapshotUrl.trim() || null,
             protocol,
             assigned_member_id: assignedMemberId || null,
           })
@@ -265,7 +274,7 @@ export default function DashboardScreen() {
         name: cameraName,
         type: newCamType,
         url: (newCamType === 'video' || newCamType === 'rtsp') ? newCamUrl : undefined,
-        snapshot_url: newSnapshotUrl.trim() || (newCamType === 'rtsp' ? newCamUrl.trim() : undefined),
+        snapshot_url: newSnapshotUrl.trim() || undefined,
         protocol,
         assigned_member_id: assignedMemberId || undefined,
         assigned_member_name: assignedMember?.display_name,
@@ -273,6 +282,7 @@ export default function DashboardScreen() {
 
       const updated = [...cameras, newCam];
       setCameras(updated);
+      requestCameraMonitoringRefresh();
       try {
         await AsyncStorage.setItem('@family_cameras', JSON.stringify(updated));
       } catch (cacheError) {
@@ -288,15 +298,17 @@ export default function DashboardScreen() {
     } catch (err) {
       Alert.alert('เพิ่มกล้องไม่สำเร็จ', getFriendlyErrorMessage(err, 'ตรวจข้อมูลกล้องแล้วลองอีกครั้ง'));
     } finally {
+      savingCameraRef.current = false;
       setSavingCamera(false);
     }
   };
 
   const handleTestCamera = async () => {
+    const source = newCamUrl.trim();
     setCameraTest({ state: 'testing', message: 'กำลังรับภาพจากกล้อง...' });
     try {
       const result = await testCameraConnection(newCamUrl, newSnapshotUrl, Platform.OS === 'web');
-      setCameraTest({ state: result.success ? 'success' : 'error', message: result.message });
+      setCameraTest({ state: result.success ? 'success' : 'error', message: result.message, source });
     } catch (error) {
       setCameraTest({ state: 'error', message: getFriendlyErrorMessage(error, 'ทดสอบกล้องไม่สำเร็จ กรุณาลองอีกครั้ง') });
     }
@@ -387,6 +399,7 @@ export default function DashboardScreen() {
       setMembers(prev => prev.map(m => m.id === id ? { ...m, is_tracked: currentVal } : m));
       console.error(error);
     }
+    requestCameraMonitoringRefresh();
   };
 
   const confirmDeleteCamera = (camId: string, camName: string) => {
@@ -404,6 +417,7 @@ export default function DashboardScreen() {
               if (error) throw error;
               const updated = cameras.filter(c => c.id !== camId);
               setCameras(updated);
+              requestCameraMonitoringRefresh();
               await AsyncStorage.setItem('@family_cameras', JSON.stringify(updated));
             } catch (delErr) {
               Alert.alert('ลบกล้องไม่สำเร็จ', getFriendlyErrorMessage(delErr));
@@ -511,34 +525,19 @@ export default function DashboardScreen() {
   const trackedCount = careRecipients.filter(m => m.is_tracked).length;
   const trackedMemberIds = getTrackedMemberIds(careRecipients);
   const allPeopleMode = usesAllPeopleMode(trackedMemberIds);
-  const aiConfigured = Boolean(!homeWorkerMode && process.env.EXPO_PUBLIC_AI_FUNCTION_NAME && getAnalysisIntervalMs() && getCaptureQuality() &&
+  const nativeAi = !homeWorkerMode && hasNativeCameraMonitoring();
+  const aiConfigured = nativeAi || Boolean(!homeWorkerMode && process.env.EXPO_PUBLIC_AI_FUNCTION_NAME && getAnalysisIntervalMs() && getCaptureQuality() &&
     Number(process.env.EXPO_PUBLIC_AI_FALL_CONFIDENCE) > 0 && Number(process.env.EXPO_PUBLIC_AI_FALL_CONFIDENCE) <= 1 &&
     Number.isInteger(Number(process.env.EXPO_PUBLIC_AI_CONFIRMATIONS)) && Number(process.env.EXPO_PUBLIC_AI_CONFIRMATIONS) > 0);
   const monitoringCount = aiConfigured
-    ? cameras.filter((camera) => shouldMonitorCamera(camera, trackedMemberIds)).length : 0;
+    ? cameras.filter((camera) => shouldMonitorCamera(camera, trackedMemberIds) &&
+      (!nativeAi || (camera.type !== 'device' && isCameraMonitorReady(nativeCameraStates[camera.id])))).length : 0;
+  const backgroundMonitoringActive = nativeAi && monitoringCount > 0;
+  const backgroundMonitoringError = Object.values(nativeCameraStates).some((state) => state.state === 'ai_error')
+    ? 'AI บนอุปกรณ์ตรวจไม่ได้ กรุณาตรวจสถานะกล้อง'
+    : Object.values(nativeCameraStates).some(isCameraMonitorSlow)
+      ? 'AI ประมวลผลช้าและอาจพลาดเหตุล้ม · ลองลดจำนวนกล้องหรือใช้เครื่องที่เร็วขึ้น' : '';
 
-  useEffect(() => {
-    if (Platform.OS !== 'android' || loadingMembers || loadingCameras) return;
-    let active = true;
-    const syncBackgroundMonitoring = async () => {
-      try {
-        if (monitoringCount > 0) {
-          await startBackgroundMonitoring();
-          if (active) setBackgroundMonitoringActive(true);
-        } else {
-          await stopBackgroundMonitoring();
-          if (active) setBackgroundMonitoringActive(false);
-        }
-        if (active) setBackgroundMonitoringError('');
-      } catch (error) {
-        if (!active) return;
-        setBackgroundMonitoringActive(false);
-        setBackgroundMonitoringError(error instanceof Error ? error.message : 'เปิดการเฝ้าระวังเบื้องหลังไม่สำเร็จ');
-      }
-    };
-    void syncBackgroundMonitoring();
-    return () => { active = false; };
-  }, [loadingCameras, loadingMembers, monitoringCount]);
 
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
@@ -671,7 +670,7 @@ export default function DashboardScreen() {
                     <Text style={styles.aiBannerTitle}>{homeWorkerMode ? monitorSummary.title : backgroundMonitoringActive ? 'AI กำลังเฝ้าระวังเบื้องหลัง' : monitoringCount > 0 ? 'กำลังเปิดการเฝ้าระวัง' : 'ยังไม่ได้เปิดการตรวจภาพด้วย AI'}</Text>
                     <Text style={styles.aiBannerSubtitle}>
                       {homeWorkerMode ? monitorSummary.subtitle : backgroundMonitoringError || (monitoringCount > 0
-                        ? `กล้อง ${monitoringCount} ตัว · ${allPeopleMode ? 'ตรวจทุกคนในภาพ' : `ดูแลบุคคลเป้าหมาย ${trackedCount} คน`}`
+                        ? `กล้อง ${monitoringCount} ตัว · ${allPeopleMode ? 'ตรวจทุกคนในภาพ' : hasNativeCameraMonitoring() && !homeWorkerMode ? 'ตรวจคนในพื้นที่ที่เลือก · ยังไม่ยืนยันชื่อ' : `ดูแลบุคคลเป้าหมาย ${trackedCount} คน`}`
                         : 'ยังไม่มีกล้องที่พร้อมให้ AI ตรวจภาพ')}
                     </Text>
                   </View>
@@ -810,7 +809,7 @@ export default function DashboardScreen() {
                         camera={cam}
                         style={styles.videoPlayer}
                         monitoring={shouldMonitorCamera(cam, trackedMemberIds)}
-                        analysisEnabled={Platform.OS !== 'android'}
+                        analysisEnabled={Platform.OS !== 'android' || cam.type === 'device'}
                         onFallDetected={(imageUri, analysis) => {
                           if (pendingAlertRef.current) return;
                           setActiveAlertCamId(cam.id);
@@ -1065,7 +1064,9 @@ export default function DashboardScreen() {
               })}
             </ScrollView>
             <Text style={{ color: colors.textSecondary, fontSize: 11, lineHeight: 17, marginTop: -5, marginBottom: 13 }}>
-              {allPeopleMode
+              {hasNativeCameraMonitoring() && !homeWorkerMode
+                ? 'AI บนอุปกรณ์ตรวจคนในกล้องที่เลือก ชื่อใช้จัดพื้นที่ดูแล ยังไม่ใช้ยืนยันว่าใครเป็นคนล้ม'
+                : allPeopleMode
                 ? 'เมื่อเปิดเลือกดูแลบุคคลใด ระบบจะเปลี่ยนไปตรวจเฉพาะบุคคลเป้าหมายโดยอัตโนมัติ'
                 : 'ระบบติดตามคนต่อเนื่องแม้หันหลัง แต่จะแจ้งว่าเป็น “พื้นที่ของ...” เพื่อไม่เดาชื่อเมื่อมีหลายคนหรือภาพไม่ชัด'}
             </Text>
@@ -1127,7 +1128,7 @@ export default function DashboardScreen() {
                   autoCapitalize="none"
                 />
                 <Text style={{ fontSize: 10, color: '#64748b', marginTop: -6, marginBottom: 12 }}>
-                  ใส่ HLS (.m3u8) หรือ MJPEG เพียงช่องเดียว ระบบจะดึงภาพให้ AI อัตโนมัติ
+                  ใส่ HLS (.m3u8) เพียงลิงก์เดียว APK Android จะรับภาพและตรวจล้มบนอุปกรณ์
                 </Text>
                 {Platform.OS !== 'web' ? (
                   <View style={styles.cameraAddressTip}>
@@ -1137,7 +1138,7 @@ export default function DashboardScreen() {
                     </Text>
                   </View>
                 ) : null}
-                <TouchableOpacity
+                {homeWorkerMode ? <TouchableOpacity
                   style={styles.advancedCameraButton}
                   onPress={() => setShowAdvancedCamera((current) => !current)}
                   accessibilityRole="button"
@@ -1146,7 +1147,7 @@ export default function DashboardScreen() {
                   <MaterialCommunityIcons name="tune-variant" size={18} color="#475569" />
                   <Text style={styles.advancedCameraButtonText}>ตัวเลือกเพิ่มเติม</Text>
                   <MaterialCommunityIcons name={showAdvancedCamera ? 'chevron-up' : 'chevron-down'} size={20} color="#64748b" />
-                </TouchableOpacity>
+                </TouchableOpacity> : null}
               </>
             )}
 
@@ -1168,7 +1169,7 @@ export default function DashboardScreen() {
 
             {newCamType !== 'device' && (
               <>
-                {(newCamType === 'video' || showAdvancedCamera) ? (
+                {homeWorkerMode && (newCamType === 'video' || showAdvancedCamera) ? (
                   <>
                     <Text style={styles.inputLabel}>
                       ลิงก์ภาพนิ่ง JPEG/PNG {newCamType === 'video' ? 'สำหรับ AI' : '(ถ้ามี)'}

@@ -27,7 +27,7 @@ import {
   callPhoneNumber, isValidMobilePhone, MOBILE_PHONE_LENGTH, normalizeMobilePhoneInput,
 } from '../lib/phone';
 import { getFriendlyErrorMessage } from '../lib/friendlyError';
-import { registerForPushNotificationsAsync, sendLocalTestNotification } from '../lib/pushNotifications';
+import { registerForPushNotificationsAsync, sendLocalTestNotification, STORAGE_KEY_PUSH_REGISTRATION } from '../lib/pushNotifications';
 
 interface EmergencyContact {
   id: string;
@@ -195,10 +195,12 @@ export default function ProfileScreen() {
       }
 
       const sent = await sendLocalTestNotification();
+      const remoteReady = await AsyncStorage.getItem(STORAGE_KEY_PUSH_REGISTRATION) === 'remote_ready';
       Alert.alert(
         sent ? 'ทดสอบสำเร็จ' : 'ทดสอบไม่สำเร็จ',
         sent
-          ? 'การแจ้งเตือนบนมือถือเครื่องนี้ทำงานแล้ว'
+          ? remoteReady ? 'การแจ้งเตือนบนเครื่องนี้ทำงานแล้ว · ยังต้องทดสอบรับเหตุจากเครื่องตรวจ'
+            : 'การแจ้งเตือนบนเครื่องนี้ทำงานแล้ว · รับแจ้งเตือนจากเครื่องอื่นยังไม่พร้อม'
           : 'กรุณาตรวจสิทธิ์การแจ้งเตือนแล้วลองอีกครั้ง',
       );
     } catch (error) {

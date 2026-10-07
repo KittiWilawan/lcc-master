@@ -1,4 +1,5 @@
 import { NativeModules, Platform } from 'react-native';
+import { clearCameraMonitorStates } from './cameraMonitoring';
 
 interface BackgroundMonitoringNativeModule {
   start(): Promise<boolean>;
@@ -22,6 +23,7 @@ export async function startBackgroundMonitoring(): Promise<boolean> {
 }
 
 export async function stopBackgroundMonitoring(): Promise<boolean> {
+  clearCameraMonitorStates();
   const module = getAndroidModule();
   return module ? module.stop() : false;
 }

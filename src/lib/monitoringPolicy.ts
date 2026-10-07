@@ -1,3 +1,5 @@
+import { resolveCameraSource } from './cameraSource';
+
 export interface MonitoringMember {
   id: string;
   is_tracked: boolean;
@@ -6,6 +8,7 @@ export interface MonitoringMember {
 export interface MonitoringCamera {
   type: 'video' | 'device' | 'rtsp';
   snapshot_url?: string | null;
+  url?: string | null;
   assigned_member_id?: string | null;
 }
 
@@ -14,7 +17,7 @@ export function getTrackedMemberIds(members: MonitoringMember[]): Set<string> {
 }
 
 export function isCameraReadyForAnalysis(camera: MonitoringCamera): boolean {
-  return camera.type === 'device' || Boolean(camera.snapshot_url?.trim());
+  return camera.type === 'device' || Boolean(resolveCameraSource(camera));
 }
 
 export function shouldMonitorCamera(camera: MonitoringCamera, trackedMemberIds: Set<string>): boolean {

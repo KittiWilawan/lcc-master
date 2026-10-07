@@ -1,7 +1,7 @@
 import { FontAwesome5, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -22,9 +22,11 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const submitting = useRef(false);
 
   const handleLogin = async () => {
-    if (!email || !password) {
+    if (submitting.current) return;
+    if (!email.trim() || !password) {
       Alert.alert(
         'ข้อมูลไม่ครบถ้วน', 
         'กรุณากรอก "อีเมล" และ "รหัสผ่าน" ให้ครบถ้วนเพื่อเข้าสู่ระบบครับ'
@@ -32,6 +34,7 @@ export default function LoginScreen() {
       return;
     }
 
+    submitting.current = true;
     setLoading(true);
     try {
       const { data: loginData, error } = await supabase.auth.signInWithPassword({
@@ -46,9 +49,13 @@ export default function LoginScreen() {
       let hasFamily = false;
 
       if (userId) {
-        const familyInfo = await checkAndSaveUserFamily(userId);
-        if (familyInfo?.familyId) {
-          hasFamily = true;
+        try {
+          const familyInfo = await checkAndSaveUserFamily(userId);
+          hasFamily = Boolean(familyInfo?.familyId);
+        } catch (familyError) {
+          Alert.alert('เข้าสู่ระบบแล้ว แต่โหลดครอบครัวไม่สำเร็จ', getFriendlyErrorMessage(familyError));
+          router.replace('/(tabs)/home');
+          return;
         }
       }
 
@@ -66,9 +73,10 @@ export default function LoginScreen() {
         router.replace('/family-setup');
       }
     } catch (error: unknown) {
-      Alert.alert('เข้าสู่ระบบไม่สำเร็จ', getFriendlyErrorMessage(error));
+      Alert.alert('เข้าสู่ระบบไม่สำเร็จ', getAuthErrorMessage(error));
     } finally {
       setLoading(false);
+      submitting.current = false;
     }
   };
 
@@ -124,6 +132,9 @@ export default function LoginScreen() {
                 onChangeText={setEmail}
                 keyboardType="email-address"
                 autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="email"
+                editable={!loading}
               />
             </View>
           </View>
@@ -146,6 +157,9 @@ export default function LoginScreen() {
                 onChangeText={setPassword}
                 secureTextEntry={!showPassword}
                 autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="current-password"
+                editable={!loading}
               />
               <TouchableOpacity style={styles.inputIconRight} onPress={() => setShowPassword(!showPassword)}>
                 <Ionicons name={showPassword ? "eye-off-outline" : "eye-outline"} size={20} color="#9ca3af" />

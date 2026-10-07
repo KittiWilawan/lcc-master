@@ -3,6 +3,7 @@ apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
+def auditApplicationSuffix = findProperty('looklancare.testApplicationSuffix') ?: ''
 def releaseKeystorePropertiesFile = rootProject.file("keystore.properties")
 def releaseKeystoreProperties = new Properties()
 if (releaseKeystorePropertiesFile.exists()) {
@@ -90,6 +91,7 @@ def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBu
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
 android {
+    testBuildType findProperty('looklancare.testBuildType') ?: 'debug'
     ndkVersion rootProject.ext.ndkVersion
 
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -100,8 +102,9 @@ android {
         applicationId 'com.looklancare.app'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 4
-        versionName "1.0.3"
+        versionCode 7
+        versionName "1.0.6"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
@@ -123,10 +126,12 @@ android {
     }
     buildTypes {
         debug {
+            applicationIdSuffix auditApplicationSuffix
             signingConfig signingConfigs.debug
         }
         release {
-            signingConfig hasReleaseSigning ? signingConfigs.release : signingConfigs.debug
+            applicationIdSuffix auditApplicationSuffix
+            signingConfig auditApplicationSuffix ? signingConfigs.debug : hasReleaseSigning ? signingConfigs.release : signingConfigs.debug
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds
@@ -167,6 +172,13 @@ android {
 }
 
 dependencies {
+    def cameraMediaVersion = providers.gradleProperty('looklancare.media3Version').get()
+    implementation("androidx.media3:media3-exoplayer:${cameraMediaVersion}")
+    implementation("androidx.media3:media3-exoplayer-hls:${cameraMediaVersion}")
+    implementation("com.google.mediapipe:tasks-vision:${providers.gradleProperty('looklancare.mediaPipeVersion').get()}")
+    testImplementation('junit:junit:4.13.2')
+    androidTestImplementation('androidx.test:runner:1.7.0')
+    androidTestImplementation('junit:junit:4.13.2')
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
 

@@ -2,7 +2,7 @@
   "expo": {
     "name": "LookLanCare",
     "slug": "looklancare",
-    "version": "1.0.3",
+    "version": "1.0.6",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "llc",
@@ -13,6 +13,7 @@
       "bundleIdentifier": "com.looklancare.app"
     },
     "android": {
+      "versionCode": 7,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -24,6 +25,7 @@
       "permissions": [
         "CAMERA",
         "INTERNET",
+        "WAKE_LOCK",
         "POST_NOTIFICATIONS",
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_SPECIAL_USE"
