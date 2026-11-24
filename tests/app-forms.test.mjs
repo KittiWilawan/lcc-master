@@ -88,7 +88,7 @@ async function notificationHarness({ status = 'granted', environment = 'standalo
 }
 test('local notification test is isolated from family alerts and preserves push registration', async () => {
   const { app, calls, values } = await notificationHarness();
-  assert.equal(await app.sendLocalTestNotification(), true);
+  assert.equal(await app.scheduleLocalTestNotification(), 'test-id');
   assert.equal(calls.remote, 0); assert.equal(calls.schedules.length, 1);
   assert.equal(calls.schedules[0].content.data.type, 'notification_test');
   assert.equal(calls.schedules[0].trigger.channelId, 'looklancare-notification-test');
@@ -97,13 +97,40 @@ test('local notification test is isolated from family alerts and preserves push 
 });
 test('denied notification permission cannot be reported as a successful test', async () => {
   const { app, calls } = await notificationHarness({ status: 'denied' });
-  assert.equal(await app.sendLocalTestNotification(), false); assert.equal(calls.schedules.length, 0);
+  assert.equal(await app.scheduleLocalTestNotification(), null); assert.equal(calls.schedules.length, 0);
 });
 test('Expo Go supports the local test while web reports unsupported', async () => {
   const expo = await notificationHarness({ environment: 'expo' });
-  assert.equal(await expo.app.sendLocalTestNotification(), true); assert.equal(expo.calls.remote, 0);
+  assert.equal(await expo.app.scheduleLocalTestNotification(), 'test-id'); assert.equal(expo.calls.remote, 0);
   const web = await notificationHarness({ platform: 'web' });
-  assert.equal(await web.app.sendLocalTestNotification(), false); assert.equal(web.calls.schedules.length, 0);
+  assert.equal(await web.app.scheduleLocalTestNotification(), null); assert.equal(web.calls.schedules.length, 0);
+});
+
+test('scheduled device tests persist after reopening and stay private to the account', async () => {
+  const data = new Map();
+  const storage = {
+    getItem: async key => data.get(key) ?? null,
+    mergeItem: async (key, raw) => data.set(key, JSON.stringify({
+      ...JSON.parse(data.get(key) ?? '{}'), ...JSON.parse(raw),
+    })),
+  };
+  const loadHistory = () => load('src/lib/localNotificationHistory.ts', { '@react-native-async-storage/async-storage': storage });
+  const history = await loadHistory();
+  let nextId = 'first';
+  const useCase = await load('src/lib/testDeviceNotification.ts', {
+    './localNotificationHistory': history,
+    './pushNotifications': { scheduleLocalTestNotification: async () => nextId },
+    './supabase': { supabase: { auth: { getSession: async () => ({ data: { session: { user: { id: 'alice' } } } }) } } },
+    './appAlert': { AppAlert: { success() {}, error() {} } }, './friendlyError': { getFriendlyErrorMessage: String },
+  });
+  assert.equal(await useCase.testDeviceNotification(), true);
+  nextId = 'second';
+  assert.equal(await useCase.testDeviceNotification(), true);
+  nextId = null;
+  assert.equal(await useCase.testDeviceNotification(), false);
+  const reopened = await loadHistory();
+  assert.deepEqual(Array.from(await reopened.getScheduledTests('alice'), row => row.id), ['first', 'second']);
+  assert.equal((await reopened.getScheduledTests('bob')).length, 0);
 });
 const persistence = await load('src/lib/faceScanSave.ts');
 test('scan saving hands one immutable complete set to a single repository operation', async () => {

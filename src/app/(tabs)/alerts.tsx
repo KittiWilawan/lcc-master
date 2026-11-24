@@ -1,7 +1,8 @@
 import { CareText as Text } from '../../components/CareText';
 import { AppAlert as Alert } from '../../lib/appAlert';
 import { useTheme, type ThemeColors } from '../../context/ThemeContext';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useFocusEffect } from 'expo-router';
 import {
   View,
   StyleSheet,
@@ -13,8 +14,8 @@ import {
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { sendLocalTestNotification } from '../../lib/pushNotifications';
-import forms from '../../config/forms.json';
+import { testDeviceNotification } from '../../lib/testDeviceNotification';
+import { getScheduledTests, type ScheduledTest } from '../../lib/localNotificationHistory';
 import { supabase } from '../../lib/supabase';
 import { EventDeliveryStatus } from '../../components/EventDeliveryStatus';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -24,6 +25,7 @@ import { getFriendlyErrorMessage } from '../../lib/friendlyError';
 
 interface AlertItem {
   id: string;
+  createdAt: number;
   type: 'critical' | 'simulated' | 'sos';
   title: string;
   subtitle: string;
@@ -44,14 +46,40 @@ export default function AlertsScreen() {
   const styles = createStyles(colors);
   const [filter, setFilter] = useState<AlertItem['type'] | 'all'>('all');
   const [testingNotification, setTestingNotification] = useState(false);
+  const [scheduledTests, setScheduledTests] = useState<ScheduledTest[]>([]);
+  const refreshTestHistory = useRef<(() => void) | null>(null);
+  const [historyUnavailable, setHistoryUnavailable] = useState(false);
+  useFocusEffect(useCallback(() => {
+    let revision = 0;
+    let owner: string | undefined;
+    const load = () => {
+      const request = ++revision;
+      setHistoryUnavailable(false);
+      if (!owner) return;
+      void getScheduledTests(owner).then(rows => {
+        if (request === revision) setScheduledTests(rows);
+      }).catch(() => {
+        if (request === revision) setHistoryUnavailable(true);
+      });
+    };
+    refreshTestHistory.current = load;
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (owner !== session?.user.id || !session) setScheduledTests([]);
+      owner = session?.user.id;
+      load();
+    });
+    return () => { revision++; refreshTestHistory.current = null; data.subscription.unsubscribe(); };
+  }, []));
   const testing = useRef(false);
   const testNotification = async () => {
     if (testing.current) return;
     testing.current = true; setTestingNotification(true);
     try {
-      if (await sendLocalTestNotification()) Alert.success('ตั้งเวลาทดสอบแล้ว', `ดูแถบแจ้งเตือนภายใน ${forms.notificationTestDelaySeconds} วินาที การทดสอบนี้ไม่ส่งเหตุฉุกเฉินให้ครอบครัว`);
-      else Alert.error('ยังทดสอบไม่ได้', 'กรุณาอนุญาตการแจ้งเตือนในการตั้งค่ามือถือ และใช้แอปบนมือถือ');
-    } catch (error) { Alert.error('ทดสอบไม่สำเร็จ', getFriendlyErrorMessage(error)); }
+      if (await testDeviceNotification()) {
+        setFilter(current => current === 'all' ? current : 'simulated');
+        refreshTestHistory.current?.();
+      }
+    }
     finally { testing.current = false; setTestingNotification(false); }
   };
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
@@ -91,6 +119,7 @@ export default function AlertsScreen() {
 
           return {
             id: item.id || idx.toString(),
+            createdAt: dateObj.getTime(),
             type: isActual ? 'critical' : item.event_type === 'simulated' ? 'simulated' : 'sos',
             title: isActual ? 'AI สงสัยว่าอาจเกิดการล้ม' : item.event_type === 'sos' ? 'สัญญาณ SOS' : 'เหตุการณ์ทดสอบ',
             subtitle: item.details || `ตรวจพบการหกล้มที่ ${item.camera_name || 'กล้องวงจรปิด'}`,
@@ -244,6 +273,12 @@ export default function AlertsScreen() {
     }
   };
 
+  const visibleAlerts = [
+    ...alerts,
+    ...scheduledTests.map(test => ({ ...test, type: 'deviceTest' as const })),
+  ].filter(item => filter === 'all' || (item.type === 'deviceTest' ? 'simulated' : item.type) === filter)
+    .sort((a, b) => b.createdAt - a.createdAt);
+
   return (
     <View style={styles.safeArea}>
       {/* Red SOS Header */}
@@ -258,7 +293,7 @@ export default function AlertsScreen() {
               <Text style={styles.sosSubtitle}>ตรวจเหตุและช่วยเหลือ</Text>
             </View>
           </View>
-          <TouchableOpacity onPress={() => void loadAlertsAndMembers()}>
+          <TouchableOpacity onPress={() => { refreshTestHistory.current?.(); void loadAlertsAndMembers(); }}>
             <Text style={styles.sosEditLink}>รีเฟรช</Text>
           </TouchableOpacity>
         </View>
@@ -275,20 +310,28 @@ export default function AlertsScreen() {
           {testingNotification ? <ActivityIndicator color={colors.onAccent} /> : <Text style={{ color: colors.onAccent, fontSize: 16, fontWeight: '700' }}>ทดสอบการแจ้งเตือน</Text>}
         </TouchableOpacity>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
-          {([{ key: 'all', label: 'ทั้งหมด' }, { key: 'critical', label: 'AI สงสัยล้ม' }, { key: 'sos', label: 'SOS' }, { key: 'simulated', label: 'จำลอง' }] as const).map(item =>
+          {([{ key: 'all', label: 'ทั้งหมด' }, { key: 'critical', label: 'AI สงสัยล้ม' }, { key: 'sos', label: 'SOS' }, { key: 'simulated', label: 'ทดสอบ / จำลอง' }] as const).map(item =>
             <TouchableOpacity key={item.key} accessibilityRole="button" accessibilityState={{ selected: filter === item.key }} onPress={() => setFilter(item.key)}
               style={{ minHeight: 48, padding: 12, borderRadius: 14, backgroundColor: filter === item.key ? colors.accentBg : colors.card, borderWidth: 1, borderColor: filter === item.key ? colors.accentText : colors.cardBorder }}>
               <Text style={{ color: filter === item.key ? colors.accentText : colors.textPrimary, fontWeight: '700' }}>{item.label}</Text>
             </TouchableOpacity>)}
         </View>
-        {!loadingAlerts && !alerts.some(item => filter === 'all' || item.type === filter) && <View style={{ padding: 28, backgroundColor: colors.card, borderRadius: 18 }}>
+        {historyUnavailable && <Text style={styles.alertSubtitle}>อ่านประวัติการทดสอบบนเครื่องไม่ได้ กรุณากดรีเฟรช</Text>}
+        {!loadingAlerts && !historyUnavailable && !visibleAlerts.length && <View style={{ padding: 28, backgroundColor: colors.card, borderRadius: 18 }}>
           <Text style={{ color: colors.textPrimary, fontSize: 18, textAlign: 'center' }}>ยังไม่มีเหตุการณ์ในหมวดนี้</Text>
           <Text style={{ color: colors.textSecondary, textAlign: 'center', marginTop: 8 }}>เหตุที่บันทึกจะแสดงที่นี่</Text>
         </View>}
-        {loadingAlerts ? (
+        {loadingAlerts && (
           <ActivityIndicator size="large" color={colors.accentText} style={{ marginVertical: 40 }} />
-        ) : (
-          alerts.filter(item => filter === 'all' || item.type === filter).map((alert) => {
+        )}
+        {visibleAlerts.map((alert) => {
+            if (alert.type === 'deviceTest') return (
+              <View key={'device-test:' + alert.id} style={styles.alertCard}>
+                <Text style={styles.alertTime}>{new Date(alert.createdAt).toLocaleString('th-TH')}</Text>
+                <Text style={styles.alertTitle}>ทดสอบการแจ้งเตือนบนเครื่องนี้</Text>
+                <Text style={styles.alertSubtitle}>ตั้งเวลาทดสอบแล้ว</Text>
+              </View>
+            );
             const statusBadge = getStatusBadge(alert.status);
             const alertIcon = getAlertIcon(alert.type);
             const alertLabel = getAlertLabel(alert.type);
@@ -377,8 +420,7 @@ export default function AlertsScreen() {
                 )}
               </View>
             );
-          })
-        )}
+          })}
 
         {/* Family Lead / Caregiver */}
         <View style={styles.caregiverCard}>

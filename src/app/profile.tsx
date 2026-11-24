@@ -23,7 +23,6 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppAlert as Alert } from '../lib/appAlert';
 import { normalizePin, PIN_LENGTH, validatePinPair } from '../lib/formValidation';
-import forms from '../config/forms.json';
 import { supabase } from '../lib/supabase';
 import { useTheme, type ThemeColors } from '../context/ThemeContext';
 import { SetupReturnButton } from '../components/SetupReturnButton';
@@ -32,7 +31,8 @@ import {
   callPhoneNumber, isValidMobilePhone, MOBILE_PHONE_LENGTH, normalizeMobilePhoneInput,
 } from '../lib/phone';
 import { getFriendlyErrorMessage } from '../lib/friendlyError';
-import { sendLocalTestNotification, sendRemoteSelfTestNotification } from '../lib/pushNotifications';
+import { sendRemoteSelfTestNotification } from '../lib/pushNotifications';
+import { testDeviceNotification } from '../lib/testDeviceNotification';
 
 interface EmergencyContact {
   id: string;
@@ -221,13 +221,8 @@ export default function ProfileScreen() {
     if (testingAppNotification) return;
     setTestingAppNotification(true);
     try {
-      const scheduled = await sendLocalTestNotification();
-      if (!scheduled) {
-        Alert.error('ยังทดสอบไม่ได้', 'กรุณาอนุญาตการแจ้งเตือนในตั้งค่ามือถือ และใช้แอปบนมือถือ');
-        return;
-      }
-      Alert.success('ตั้งเวลาทดสอบแล้ว', `ดูการแจ้งเตือนในแถบแจ้งเตือนภายใน ${forms.notificationTestDelaySeconds} วินาที เป็นการทดสอบเฉพาะเครื่องนี้`);
-    } catch (error) { Alert.error('ทดสอบไม่สำเร็จ', getFriendlyErrorMessage(error)); }
+      await testDeviceNotification();
+    }
     finally { setTestingAppNotification(false); }
   };
 

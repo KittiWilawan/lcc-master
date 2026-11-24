@@ -14,9 +14,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../context/ThemeContext';
 import { checkSystemReadiness, ReadinessStep, SystemReadiness } from '../lib/systemReadiness';
-import { sendLocalTestNotification } from '../lib/pushNotifications';
+import { testDeviceNotification } from '../lib/testDeviceNotification';
 import { AppAlert as Alert } from '../lib/appAlert';
-import forms from '../config/forms.json';
 import { MonitoringStatusCard } from '../components/MonitoringStatusCard';
 import readability from '../config/readability.json';
 import { useCameraMonitoringStates } from '../lib/cameraMonitoring';
@@ -177,16 +176,7 @@ export default function SetupGuideScreen() {
     if (testingNotification) return;
     setTestingNotification(true);
     try {
-      const sent = await sendLocalTestNotification();
-      if (!sent) {
-        Alert.error(
-          'ยังทดสอบไม่ได้',
-          'เปิดสิทธิ์การแจ้งเตือนให้ LookLanCare ในการตั้งค่ามือถือ แล้วกลับมาทดสอบบนมือถืออีกครั้ง'
-        );
-        return;
-      }
-      Alert.success('ตั้งเวลาทดสอบแล้ว', `ดูแถบแจ้งเตือนภายใน ${forms.notificationTestDelaySeconds} วินาที ทดสอบเฉพาะเครื่องนี้`);
-      await runCheck();
+      if (await testDeviceNotification()) await runCheck();
     } catch {
       Alert.error('ทดสอบไม่สำเร็จ', 'กรุณาตรวจสิทธิ์การแจ้งเตือนและลองอีกครั้ง');
     } finally {

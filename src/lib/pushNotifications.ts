@@ -326,17 +326,17 @@ export async function sendLocalSOSNotification(): Promise<void> {
  * Show a harmless notification on this device only.
  * This is intentionally separate from SOS so a setup check cannot alert family members.
  */
-export async function sendLocalTestNotification(): Promise<boolean> {
-  if (!await ensureLocalNotificationsReady()) return false;
+export async function scheduleLocalTestNotification(): Promise<string | null> {
+  if (!await ensureLocalNotificationsReady()) return null;
   const Notifications = getNotificationsModule();
-  if (!Notifications || typeof Notifications.scheduleNotificationAsync !== 'function') return false;
+  if (!Notifications || typeof Notifications.scheduleNotificationAsync !== 'function') return null;
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync(forms.notificationTestChannel, {
       name: 'ทดสอบการแจ้งเตือน', importance: Notifications.AndroidImportance.HIGH,
       lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
     });
   }
-  await Notifications.scheduleNotificationAsync({
+  return Notifications.scheduleNotificationAsync({
     content: {
       title: 'ทดสอบการแจ้งเตือน LookLanCare',
       body: 'นี่คือการทดสอบบนเครื่องนี้ ไม่มีเหตุฉุกเฉิน',
@@ -348,5 +348,4 @@ export async function sendLocalTestNotification(): Promise<boolean> {
       seconds: forms.notificationTestDelaySeconds, repeats: false,
       ...(Platform.OS === 'android' ? { channelId: forms.notificationTestChannel } : {}) },
   });
-  return true;
 }
