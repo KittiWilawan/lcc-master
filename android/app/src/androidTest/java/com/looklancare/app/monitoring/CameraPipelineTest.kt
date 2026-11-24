@@ -111,13 +111,8 @@ class CameraPipelineTest {
         var firstFrameMs = 0L
         var firstFallMs: Long? = null
         val inferenceThread = java.util.concurrent.Executors.newSingleThreadExecutor()
-        val busy = java.util.concurrent.atomic.AtomicBoolean(false)
-        val session = CameraStreamSession(context, baseUrl + case.getString("path"), config,
-          { state -> synchronized(states) { states.add(state) }; if (state == "ended") done.countDown() },
-          { bitmap, timestamp ->
-            if (!busy.compareAndSet(false, true)) bitmap.recycle()
-            else inferenceThread.execute {
-              try {
+        val dispatcher = CameraFrameDispatcher(inferenceThread, config.int("maxPendingFrames"), config.long("maxPendingFrameAgeMs")) { bitmap, timestamp ->
+          try {
                 if (frames.get() == 0) firstFrameMs = SystemClock.elapsedRealtime() - started
                 val begin = SystemClock.elapsedRealtime()
                 val result = analyzer.analyze(case.getString("id"), bitmap, timestamp)
@@ -138,12 +133,13 @@ class CameraPipelineTest {
                   val image = File(context.filesDir, "pipeline-${case.getString("id")}.jpg")
                   image.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, config.int("jpegQuality"), it) }
                 }
-              } catch (error: Exception) { inferenceErrors.add(error.javaClass.simpleName) }
-              finally { bitmap.recycle(); busy.set(false) }
-            }
-          })
+          } catch (error: Exception) { inferenceErrors.add(error.javaClass.simpleName) }
+        }
+        val session = CameraStreamSession(context, baseUrl + case.getString("path"), config,
+          { state -> synchronized(states) { states.add(state) }; if (state == "ended") done.countDown() },
+          { bitmap, timestamp -> dispatcher.submit(bitmap, timestamp) })
         done.await(case.getLong("durationMs") + config.long("readTimeoutMs"), TimeUnit.MILLISECONDS)
-        session.close(); inferenceThread.shutdown(); inferenceThread.awaitTermination(config.long("readTimeoutMs"), TimeUnit.MILLISECONDS)
+        session.close(); dispatcher.awaitIdle(config.long("readTimeoutMs")); dispatcher.close(); inferenceThread.shutdown(); inferenceThread.awaitTermination(config.long("readTimeoutMs"), TimeUnit.MILLISECONDS)
         val sorted = timings.sorted()
         val summary = JSONObject().put("id", case.getString("id")).put("label", case.getString("label"))
           .put("frames", frames.get()).put("fallSamples", falls.get()).put("predictedFall", falls.get() > 0)

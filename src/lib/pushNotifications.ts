@@ -3,6 +3,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { supabase } from './supabase';
 import { getEmergencyPhoneNumber } from './phone';
+import forms from '../config/forms.json';
+import delivery from '../../android/app/src/main/assets/monitoring/cloud.json';
+import network from '../config/network.json';
 
 export const STORAGE_KEY_EXPO_PUSH_TOKEN = '@expo_push_token';
 export const STORAGE_KEY_PUSH_REGISTRATION = '@push_registration_status';
@@ -14,14 +17,13 @@ const isExpoGo =
 
 /**
  * Safely load expo-notifications module dynamically.
- * Returns null in Expo Go on Android or Web to prevent native module crashes.
+ * Local notifications are available in Expo Go; remote push needs an app build.
  */
-function getNotificationsModule(): any | null {
+function getNotificationsModule(): typeof import('expo-notifications') | null {
   if (Platform.OS === 'web') return null;
-  if (isExpoGo && Platform.OS === 'android') return null;
 
   try {
-    // Loaded only on supported native runtimes; Expo Go on Android does not include this module.
+    // Loading lazily also supports native builds without this module.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     return require('expo-notifications');
   } catch (e) {
@@ -31,10 +33,10 @@ function getNotificationsModule(): any | null {
 }
 
 /**
- * Configure OS High-Priority Emergency Notification Channel (Android & iOS)
- * and register/sync Expo Push Token to Supabase
+ * Configure foreground presentation, emergency channel and local notification permission.
+ * This path does not register a push token or contact the backend.
  */
-export async function registerForPushNotificationsAsync(): Promise<boolean> {
+export async function ensureLocalNotificationsReady(): Promise<boolean> {
   const Notifications = getNotificationsModule();
   if (!Notifications) {
     if (isExpoGo && Platform.OS === 'android') {
@@ -99,39 +101,80 @@ export async function registerForPushNotificationsAsync(): Promise<boolean> {
       return false;
     }
 
-    // Get and save Expo Push Token
-    await AsyncStorage.setItem(STORAGE_KEY_PUSH_REGISTRATION, 'local_only');
+    if (await AsyncStorage.getItem(STORAGE_KEY_PUSH_REGISTRATION) !== 'remote_ready') {
+      await AsyncStorage.setItem(STORAGE_KEY_PUSH_REGISTRATION, 'local_only');
+    }
+    return true;
+  } catch { return false; }
+}
+
+async function withPushDeadline<T>(request: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([request, new Promise<T>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('ลงทะเบียนแจ้งเตือนตอบกลับช้าเกินไป')), network.requestTimeoutMs);
+    })]);
+  } finally { if (timer) clearTimeout(timer); }
+}
+
+export async function registerForPushNotificationsAsync(): Promise<boolean> {
+  if (!await ensureLocalNotificationsReady()) return false;
+  const Notifications = getNotificationsModule();
+  if (!Notifications) return false;
+  if (isExpoGo) return false;
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user) return false;
+    const userId = session.user.id;
     try {
       if (typeof Notifications.getExpoPushTokenAsync === 'function') {
         const projectId = Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
         if (!projectId) throw new Error('ยังไม่ได้ตั้งค่า Expo project ID สำหรับ Push');
-        const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
+        const tokenData = await withPushDeadline(Notifications.getExpoPushTokenAsync({ projectId }));
         const token = tokenData?.data;
         if (token) {
-          await syncPushTokenToSupabase(token);
+          await syncPushTokenToSupabase(token, userId);
+          const current = await supabase.auth.getSession();
+          if (current.data.session?.user.id !== userId) return false;
           await AsyncStorage.setItem(STORAGE_KEY_EXPO_PUSH_TOKEN, token);
           await AsyncStorage.setItem(STORAGE_KEY_PUSH_REGISTRATION, 'remote_ready');
+          return true;
         }
       }
     } catch {
       await AsyncStorage.removeItem(STORAGE_KEY_EXPO_PUSH_TOKEN);
+      await AsyncStorage.setItem(STORAGE_KEY_PUSH_REGISTRATION, 'remote_unavailable');
       console.warn('รับแจ้งเตือนจากเครื่องอื่นยังไม่พร้อม · การเตือนบนเครื่องนี้ยังใช้ได้');
     }
-
-    return true;
-  } catch (e) {
-    console.log('Error registering OS push notifications:', e);
+    return false;
+  } catch {
+    await AsyncStorage.removeItem(STORAGE_KEY_EXPO_PUSH_TOKEN);
+    await AsyncStorage.setItem(STORAGE_KEY_PUSH_REGISTRATION, 'remote_unavailable');
     return false;
   }
+}
+
+/** Server-to-this-phone test; no messages are sent to other family members. */
+export async function sendRemoteSelfTestNotification(testId: string, userId: string) {
+  if (!await registerForPushNotificationsAsync()) return { accepted: false, correlated: false };
+  const { data: auth } = await supabase.auth.getSession();
+  if (auth.session?.user.id !== userId) throw new Error('บัญชีเปลี่ยน กรุณาเปิดโปรไฟล์อีกครั้ง');
+  const { data, error } = await supabase.functions.invoke(delivery.functionName, {
+    headers: { Authorization: 'Bearer ' + auth.session.access_token },
+    body: { action: 'push-self-test', testId },
+  });
+  if (error) throw new Error('ระบบส่วนกลางส่งข้อความทดสอบไม่สำเร็จ');
+  return { accepted: data?.remoteAccepted === true, correlated: data?.testId === testId };
 }
 
 /**
  * Sync push token to Supabase profiles table
  */
-export async function syncPushTokenToSupabase(token: string): Promise<void> {
+export async function syncPushTokenToSupabase(token: string, expectedUserId?: string): Promise<void> {
   const { data: { session }, error: authError } = await supabase.auth.getSession();
   if (authError) throw authError;
   if (!session?.user) throw new Error('กรุณาเข้าสู่ระบบก่อนลงทะเบียนรับแจ้งเตือน');
+  if (expectedUserId && session.user.id !== expectedUserId) throw new Error('บัญชีเปลี่ยนระหว่างลงทะเบียนแจ้งเตือน');
   const { data, error } = await supabase.from('profiles').update({ expo_push_token: token })
     .eq('id', session.user.id).select('id').maybeSingle();
   if (error) throw error;
@@ -284,18 +327,26 @@ export async function sendLocalSOSNotification(): Promise<void> {
  * This is intentionally separate from SOS so a setup check cannot alert family members.
  */
 export async function sendLocalTestNotification(): Promise<boolean> {
+  if (!await ensureLocalNotificationsReady()) return false;
   const Notifications = getNotificationsModule();
   if (!Notifications || typeof Notifications.scheduleNotificationAsync !== 'function') return false;
-
+  if (Platform.OS === 'android') {
+    await Notifications.setNotificationChannelAsync(forms.notificationTestChannel, {
+      name: 'ทดสอบการแจ้งเตือน', importance: Notifications.AndroidImportance.HIGH,
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
+    });
+  }
   await Notifications.scheduleNotificationAsync({
     content: {
-      title: '✅ ทดสอบการแจ้งเตือนสำเร็จ',
-      body: 'การแจ้งเตือนบนมือถือเครื่องนี้ทำงานแล้ว',
+      title: 'ทดสอบการแจ้งเตือน LookLanCare',
+      body: 'นี่คือการทดสอบบนเครื่องนี้ ไม่มีเหตุฉุกเฉิน',
       sound: true,
       priority: Notifications.AndroidNotificationPriority?.HIGH ?? 'high',
       data: { type: 'notification_test', timestamp: new Date().toISOString() },
     },
-    trigger: null,
+    trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+      seconds: forms.notificationTestDelaySeconds, repeats: false,
+      ...(Platform.OS === 'android' ? { channelId: forms.notificationTestChannel } : {}) },
   });
   return true;
 }

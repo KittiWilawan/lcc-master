@@ -9,6 +9,7 @@ import android.opengl.GLES20
 import android.os.Handler
 import android.os.SystemClock
 import android.view.Surface
+import com.looklancare.app.imaging.FrameSizing
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -33,6 +34,7 @@ class DecodedFrameSurface(
   private var width = config.int("maxFrameDimension")
   private var height = width
   private var lastSample = 0L
+  private var videoSizeKnown = false
   private var closed = false
   private var pixels = ByteBuffer.allocateDirect(width * height * 4).order(ByteOrder.nativeOrder())
 
@@ -71,7 +73,7 @@ class DecodedFrameSurface(
           makeCurrent()
           texture.updateTexImage()
           val now = SystemClock.elapsedRealtime()
-          if (now - lastSample >= config.long("frameIntervalMs")) {
+          if (videoSizeKnown && now - lastSample >= config.long("frameIntervalMs")) {
             lastSample = now
             onFrame(readBitmap(), now)
           }
@@ -83,11 +85,11 @@ class DecodedFrameSurface(
 
   fun setVideoSize(videoWidth: Int, videoHeight: Int, pixelRatio: Float) {
     if (videoWidth <= 0 || videoHeight <= 0) return
-    val ratio = videoWidth * (if (pixelRatio.isFinite() && pixelRatio > 0f) pixelRatio else 1f) / videoHeight
-    val maximum = config.int("maxFrameDimension")
-    width = if (ratio >= 1f) maximum else (maximum * ratio).toInt().coerceAtLeast(1)
-    height = if (ratio >= 1f) (maximum / ratio).toInt().coerceAtLeast(1) else maximum
+    val dimensions = FrameSizing.fitVideo(videoWidth, videoHeight, pixelRatio, config.int("maxFrameDimension"))
+    width = dimensions.first
+    height = dimensions.second
     pixels = ByteBuffer.allocateDirect(width * height * 4).order(ByteOrder.nativeOrder())
+    videoSizeKnown = true
   }
 
   private fun readBitmap(): Bitmap {

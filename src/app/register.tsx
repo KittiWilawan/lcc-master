@@ -1,27 +1,29 @@
+import { CareText as Text } from '../components/CareText';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Linking from 'expo-linking';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Image,
   SafeAreaView,
   ScrollView,
   StyleSheet,
-  Text,
   TextInput,
   TouchableOpacity,
   View,
   KeyboardAvoidingView,
   Platform
 } from 'react-native';
+import { AppAlert as Alert } from '../lib/appAlert';
+import { validateEmail, MINIMUM_PASSWORD_LENGTH } from '../lib/formValidation';
 import { supabase } from '../lib/supabase';
 import { getAuthErrorMessage } from '../lib/friendlyError';
 import { isValidMobilePhone, MOBILE_PHONE_LENGTH, normalizeMobilePhoneInput } from '../lib/phone';
 
 export default function RegisterScreen() {
   const router = useRouter();
+  const { setup } = useLocalSearchParams<{ setup?: string }>();
 
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -33,26 +35,29 @@ export default function RegisterScreen() {
   const [loading, setLoading] = useState(false);
 
   const handleRegister = async () => {
-    if (!fullName || !email || !phone || !password || !confirmPassword) {
-      Alert.alert(
+    if (loading) return;
+    if (!fullName.trim() || !email.trim() || !phone || !password || !confirmPassword) {
+      Alert.error(
         'ข้อมูลไม่ครบถ้วน',
         'กรุณากรอกข้อมูลในช่องว่างให้ครบทุกช่องเพื่อดำเนินการต่อ'
       );
       return;
     }
+    const validated = validateEmail(email);
+    if (validated.error) { Alert.error('อีเมลไม่ถูกต้อง', validated.error); return; }
     if (password !== confirmPassword) {
-      Alert.alert(
+      Alert.error(
         'รหัสผ่านไม่ตรงกัน',
         'รหัสผ่านและการยืนยันรหัสผ่านที่คุณกรอกไม่ตรงกัน กรุณาตรวจสอบและพิมพ์ใหม่อีกครั้ง'
       );
       return;
     }
     if (!isValidMobilePhone(phone)) {
-      Alert.alert('เบอร์มือถือไม่ถูกต้อง', 'กรุณากรอกเบอร์มือถือ 10 หลัก โดยขึ้นต้นด้วย 0');
+      Alert.error('เบอร์มือถือไม่ถูกต้อง', 'กรุณากรอกเบอร์มือถือ 10 หลัก โดยขึ้นต้นด้วย 0');
       return;
     }
-    if (password.length < 8) {
-      Alert.alert(
+    if (password.length < MINIMUM_PASSWORD_LENGTH) {
+      Alert.error(
         'รหัสผ่านสั้นเกินไป',
         'เพื่อความปลอดภัย รหัสผ่านของคุณจะต้องมีความยาวอย่างน้อย 8 ตัวอักษรขึ้นไป'
       );
@@ -67,8 +72,9 @@ export default function RegisterScreen() {
     }
 
     setLoading(true);
+    try {
     const { data, error } = await supabase.auth.signUp({
-      email: email.trim().toLowerCase(),
+      email: validated.email,
       password,
       options: {
         emailRedirectTo: Linking.createURL('/login'),
@@ -79,30 +85,30 @@ export default function RegisterScreen() {
       }
     });
 
-    setLoading(false);
-
     if (error) {
-      Alert.alert('ลงทะเบียนไม่สำเร็จ', getAuthErrorMessage(error));
+      Alert.error('ลงทะเบียนไม่สำเร็จ', getAuthErrorMessage(error));
     } else if (data.session) {
-      Alert.alert(
+      Alert.success(
         '🎉 สมัครสมาชิกสำเร็จ!',
         'สร้างบัญชีเรียบร้อยแล้ว ขั้นต่อไปให้สร้างหรือเข้าร่วมครอบครัว',
-        [{ text: 'ตกลง', onPress: () => router.replace('/family-setup') }]
+        [{ text: 'ตกลง', onPress: () => router.replace(setup === 'true' ? '/setup-guide' : '/family-setup') }]
       );
     } else {
-      Alert.alert(
+      Alert.info(
         'กรุณายืนยันอีเมล',
         'ระบบส่งลิงก์ยืนยันไปที่อีเมลแล้ว เมื่อยืนยันเสร็จให้กลับมาเข้าสู่ระบบ',
-        [{ text: 'ไปหน้าเข้าสู่ระบบ', onPress: () => router.replace('/login') }]
+        [{ text: 'ไปหน้าเข้าสู่ระบบ', onPress: () => router.replace({ pathname: '/login', params: { setup } }) }]
       );
     }
+    } catch (error) { Alert.error('ลงทะเบียนไม่สำเร็จ', getAuthErrorMessage(error)); }
+    finally { setLoading(false); }
   };
 
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView 
         style={{ flex: 1 }} 
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
 
@@ -251,7 +257,7 @@ export default function RegisterScreen() {
           {/* กลับไปเข้าสู่ระบบ */}
           <View style={styles.loginHintContainer}>
             <Text style={styles.loginHint}>มีบัญชีอยู่แล้ว? </Text>
-            <TouchableOpacity onPress={() => router.push('/login')}>
+            <TouchableOpacity onPress={() => router.push({ pathname: '/login', params: { setup } })}>
               <Text style={styles.loginLink}>เข้าสู่ระบบ</Text>
             </TouchableOpacity>
           </View>

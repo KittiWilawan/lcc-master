@@ -1,3 +1,6 @@
+import { CareText as Text } from '../../components/CareText';
+import { AppAlert as Alert } from '../../lib/appAlert';
+import { useTheme, type ThemeColors } from '../../context/ThemeContext';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -5,12 +8,10 @@ import { useState, useMemo, useCallback } from 'react';
 import {
   ScrollView,
   StyleSheet,
-  Text,
   TouchableOpacity,
   View,
   Image,
   Share,
-  Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../../lib/supabase';
@@ -20,7 +21,7 @@ import * as Sharing from 'expo-sharing';
 
 interface FallEvent {
   id: string;
-  type: 'simulated' | 'actual';
+  type: 'simulated' | 'actual' | 'sos';
   timestamp: string;
   details?: string;
 }
@@ -34,6 +35,8 @@ interface DayStats {
 export default function AnalyticsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   const [events, setEvents] = useState<FallEvent[]>([]);
   const [userProfile, setUserProfile] = useState<any>(null);
   const [activeMemberName, setActiveMemberName] = useState('ผู้รับการดูแลทั้งหมด');
@@ -46,7 +49,7 @@ export default function AnalyticsScreen() {
         setEvents(
           cloudEvents.map((e) => ({
             id: e.id,
-            type: (e.event_type as 'simulated' | 'actual') || 'actual',
+            type: (e.event_type as 'simulated' | 'actual' | 'sos') || 'actual',
             timestamp: e.created_at,
             details: e.details,
           }))
@@ -118,13 +121,14 @@ export default function AnalyticsScreen() {
 
   const totalEvents = events.length;
   const actualFalls = events.filter(e => e.type === 'actual').length;
+  const sosEvents = events.filter(e => e.type === 'sos').length;
   const simulated = events.filter(e => e.type === 'simulated').length;
 
   // Risk level assessment
   const weekTotal = weeklyData.reduce((s, d) => s + d.count, 0);
   const eventSummary = weekTotal === 0 ? 'ไม่มีเหตุที่บันทึก' : `${weekTotal} เหตุการณ์`;
-  const riskColor = '#059669';
-  const riskBg = '#ecfdf5';
+  const riskColor = colors.accentText;
+  const riskBg = colors.accentBg;
 
   const handleShareDoctorReport = async () => {
     try {
@@ -207,10 +211,10 @@ export default function AnalyticsScreen() {
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf', dialogTitle: 'ส่งรายงานให้แพทย์ (PDF)' });
       } else {
-        Alert.alert('สำเร็จ', `สร้างไฟล์ PDF เรียบร้อยแล้วที่: ${uri}`);
+        Alert.success('สำเร็จ', `สร้างไฟล์ PDF เรียบร้อยแล้วที่: ${uri}`);
       }
     } catch (e: any) {
-      Alert.alert('เกิดข้อผิดพลาด', e.message);
+      Alert.error('เกิดข้อผิดพลาด', e.message);
     }
   };
 
@@ -231,7 +235,7 @@ export default function AnalyticsScreen() {
         title: 'สรุปความปลอดภัยครอบครัว',
       });
     } catch (e: any) {
-      Alert.alert('เกิดข้อผิดพลาด', e.message);
+      Alert.error('เกิดข้อผิดพลาด', e.message);
     }
   };
 
@@ -240,7 +244,7 @@ export default function AnalyticsScreen() {
       <View style={[styles.header, { paddingTop: Math.max(insets.top + 10, 14) }]}>
         <View style={styles.headerLeft}>
           <View style={styles.logoContainer}>
-            <MaterialCommunityIcons name="shield-account" size={20} color="#059669" />
+            <MaterialCommunityIcons name="shield-account" size={20} color={colors.accentText} />
           </View>
           <Text style={styles.headerTitle}>LOOKLANCARE</Text>
         </View>
@@ -248,7 +252,7 @@ export default function AnalyticsScreen() {
           {userProfile?.avatar_url ? (
             <Image source={{ uri: userProfile.avatar_url }} style={{ width: 36, height: 36, borderRadius: 18 }} />
           ) : (
-            <MaterialCommunityIcons name="account-outline" size={24} color="#64748b" />
+            <MaterialCommunityIcons name="account-outline" size={24} color={colors.textSecondary} />
           )}
         </TouchableOpacity>
       </View>
@@ -257,15 +261,15 @@ export default function AnalyticsScreen() {
 
         {/* Page Title */}
         <View style={{ marginBottom: 16 }}>
-          <Text style={{ fontSize: 20, fontWeight: '900', color: '#0f172a' }}>📊 รายงานสถิติประจำสัปดาห์</Text>
-          <Text style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>Weekly Safety & Gait Risk Analytics</Text>
+          <Text style={{ fontSize: 20, fontWeight: '900', color: colors.textPrimary }}>📊 รายงานสถิติประจำสัปดาห์</Text>
+          <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 2 }}>Weekly Safety & Gait Risk Analytics</Text>
         </View>
 
         {/* Risk Level Overview Card */}
         <View style={[styles.card, { borderLeftWidth: 4, borderLeftColor: riskColor }]}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
             <View>
-              <Text style={{ fontSize: 12, color: '#64748b', fontWeight: '600' }}>เหตุการณ์ที่บันทึกสัปดาห์นี้</Text>
+              <Text style={{ fontSize: 12, color: colors.textSecondary, fontWeight: '600' }}>เหตุการณ์ที่บันทึกสัปดาห์นี้</Text>
               <Text style={{ fontSize: 24, fontWeight: '900', color: riskColor, marginTop: 4 }}>{eventSummary}</Text>
             </View>
             <View style={[styles.riskBadge, { backgroundColor: riskBg }]}>
@@ -276,25 +280,30 @@ export default function AnalyticsScreen() {
               />
             </View>
           </View>
-          <Text style={{ fontSize: 11, color: '#94a3b8', marginTop: 8 }}>
-            พบเหตุการณ์ {weekTotal} ครั้งในสัปดาห์นี้ {weekTotal === 0 ? '(ปลอดภัย! 🎉)' : ''}
+          <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 8 }}>
+            พบเหตุการณ์ {weekTotal} ครั้งในสัปดาห์นี้
           </Text>
         </View>
 
         {/* Stats Summary Grid */}
         <View style={styles.statsGrid}>
-          <View style={[styles.statCard, { backgroundColor: '#fef2f2' }]}>
-            <MaterialCommunityIcons name="alert-circle" size={22} color="#dc2626" />
+          <View style={[styles.statCard, { backgroundColor: colors.dangerBg }]}>
+            <MaterialCommunityIcons name="alert-circle" size={22} color={colors.dangerText} />
             <Text style={styles.statNumber}>{actualFalls}</Text>
-            <Text style={styles.statLabel}>เหตุการณ์จริง</Text>
+            <Text style={styles.statLabel}>AI สงสัยล้ม</Text>
           </View>
-          <View style={[styles.statCard, { backgroundColor: '#fefce8' }]}>
+          <View style={[styles.statCard, { backgroundColor: colors.warningBg }]}>
             <MaterialCommunityIcons name="test-tube" size={22} color="#f59e0b" />
             <Text style={styles.statNumber}>{simulated}</Text>
-            <Text style={styles.statLabel}>จำลอง/SOS</Text>
+            <Text style={styles.statLabel}>เหตุจำลอง</Text>
           </View>
-          <View style={[styles.statCard, { backgroundColor: '#ecfdf5' }]}>
-            <MaterialCommunityIcons name="counter" size={22} color="#059669" />
+          <View style={[styles.statCard, { backgroundColor: colors.purpleBg }]}>
+            <MaterialCommunityIcons name="bell-ring-outline" size={22} color={colors.purpleText} />
+            <Text style={styles.statNumber}>{sosEvents}</Text>
+            <Text style={styles.statLabel}>SOS</Text>
+          </View>
+          <View style={[styles.statCard, { backgroundColor: colors.accentBg }]}>
+            <MaterialCommunityIcons name="counter" size={22} color={colors.accentText} />
             <Text style={styles.statNumber}>{totalEvents}</Text>
             <Text style={styles.statLabel}>ทั้งหมด</Text>
           </View>
@@ -303,8 +312,8 @@ export default function AnalyticsScreen() {
         {/* Weekly Fall Events Bar Chart */}
         <View style={styles.card}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 12 }}>
-            <MaterialCommunityIcons name="chart-bar" size={18} color="#059669" />
-            <Text style={{ fontSize: 14, fontWeight: '800', color: '#0f172a' }}>เหตุการณ์ล้ม 7 วันย้อนหลัง</Text>
+            <MaterialCommunityIcons name="chart-bar" size={18} color={colors.accentText} />
+            <Text style={{ fontSize: 14, fontWeight: '800', color: colors.textPrimary }}>เหตุการณ์ล้ม 7 วันย้อนหลัง</Text>
           </View>
           <View style={styles.chartContainer}>
             {weeklyData.map((day, i) => {
@@ -312,7 +321,7 @@ export default function AnalyticsScreen() {
               const isToday = i === 6;
               return (
                 <View key={i} style={styles.barGroup}>
-                  <Text style={{ fontSize: 9, fontWeight: '700', color: day.count > 0 ? '#dc2626' : '#cbd5e1', marginBottom: 4 }}>
+                  <Text style={{ fontSize: 9, fontWeight: '700', color: day.count > 0 ? colors.dangerText : colors.textMuted, marginBottom: 4 }}>
                     {day.count > 0 ? day.count : ''}
                   </Text>
                   <View
@@ -320,13 +329,13 @@ export default function AnalyticsScreen() {
                       styles.bar,
                       {
                         height: barHeight,
-                        backgroundColor: day.count > 0 ? (day.count > 2 ? '#dc2626' : '#f59e0b') : '#e2e8f0',
+                        backgroundColor: day.count > 0 ? (day.count > 2 ? '#dc2626' : '#f59e0b') : colors.cardBorder,
                         borderRadius: 4,
                       },
-                      isToday && { borderWidth: 2, borderColor: '#059669' },
+                      isToday && { borderWidth: 2, borderColor: colors.accent },
                     ]}
                   />
-                  <Text style={[styles.barLabel, isToday && { color: '#059669', fontWeight: '900' }]}>{day.label}</Text>
+                  <Text style={[styles.barLabel, isToday && { color: colors.accentText, fontWeight: '900' }]}>{day.label}</Text>
                 </View>
               );
             })}
@@ -334,12 +343,12 @@ export default function AnalyticsScreen() {
         </View>
 
         {/* Data availability */}
-        <View style={[styles.card, { backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#bbf7d0' }]}>
+        <View style={[styles.card, { backgroundColor: colors.accentBg, borderWidth: 1, borderColor: colors.accentText }]}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-            <MaterialCommunityIcons name="information-outline" size={18} color="#059669" />
-            <Text style={{ fontSize: 14, fontWeight: '800', color: '#065f46' }}>ข้อมูลการวิเคราะห์</Text>
+            <MaterialCommunityIcons name="information-outline" size={18} color={colors.accentText} />
+            <Text style={{ fontSize: 14, fontWeight: '800', color: colors.accentText }}>ข้อมูลการวิเคราะห์</Text>
           </View>
-          <Text style={{ fontSize: 12, color: '#047857', lineHeight: 20 }}>
+          <Text style={{ fontSize: 12, color: colors.accentText, lineHeight: 20 }}>
             ยังไม่มีข้อมูลการวัดการเดินเซจากเซนเซอร์หรือโมเดลที่ผ่านการตรวจสอบ รายงานนี้แสดงเฉพาะเหตุการณ์ที่บันทึกไว้
           </Text>
         </View>
@@ -347,12 +356,12 @@ export default function AnalyticsScreen() {
         {/* Export / Share Info */}
         <View style={{ flexDirection: 'row', gap: 10, marginTop: 4 }}>
           <TouchableOpacity style={styles.actionBtn} onPress={handleShareDoctorReport}>
-            <MaterialCommunityIcons name="file-document-outline" size={18} color="#059669" />
+            <MaterialCommunityIcons name="file-document-outline" size={18} color={colors.accentText} />
             <Text style={styles.actionBtnText}>ส่งรายงานให้แพทย์</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#0f172a' }]} onPress={handleShareFamilySummary}>
-            <MaterialCommunityIcons name="share-variant-outline" size={18} color="#ffffff" />
-            <Text style={[styles.actionBtnText, { color: '#ffffff' }]}>แชร์ให้ครอบครัว</Text>
+          <TouchableOpacity style={[styles.actionBtn, { backgroundColor: colors.mediaBackground }]} onPress={handleShareFamilySummary}>
+            <MaterialCommunityIcons name="share-variant-outline" size={18} color={colors.onAccent} />
+            <Text style={[styles.actionBtnText, { color: colors.onAccent }]}>แชร์ให้ครอบครัว</Text>
           </TouchableOpacity>
         </View>
 
@@ -362,10 +371,10 @@ export default function AnalyticsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: '#f8fafc',
+    backgroundColor: colors.background,
   },
   header: {
     flexDirection: 'row',
@@ -373,9 +382,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingBottom: 12,
-    backgroundColor: '#ffffff',
+    backgroundColor: colors.card,
     borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+    borderBottomColor: colors.separator,
   },
   headerLeft: {
     flexDirection: 'row',
@@ -386,21 +395,21 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 10,
-    backgroundColor: '#ecfdf5',
+    backgroundColor: colors.accentBg,
     justifyContent: 'center',
     alignItems: 'center',
   },
   headerTitle: {
     fontSize: 16,
     fontWeight: '900',
-    color: '#059669',
+    color: colors.accentText,
     letterSpacing: 1.5,
   },
   profileBtn: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#f1f5f9',
+    backgroundColor: colors.inputBg,
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
@@ -409,11 +418,11 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   card: {
-    backgroundColor: '#ffffff',
+    backgroundColor: colors.card,
     borderRadius: 16,
     padding: 16,
     marginBottom: 14,
-    shadowColor: '#0f172a',
+    shadowColor: colors.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.04,
     shadowRadius: 8,
@@ -428,11 +437,13 @@ const styles = StyleSheet.create({
   },
   statsGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
     marginBottom: 14,
   },
   statCard: {
-    flex: 1,
+    flexGrow: 1,
+    flexBasis: '46%',
     borderRadius: 14,
     padding: 14,
     alignItems: 'center',
@@ -441,12 +452,12 @@ const styles = StyleSheet.create({
   statNumber: {
     fontSize: 22,
     fontWeight: '900',
-    color: '#0f172a',
+    color: colors.textPrimary,
   },
   statLabel: {
     fontSize: 10,
     fontWeight: '600',
-    color: '#64748b',
+    color: colors.textSecondary,
   },
   chartContainer: {
     flexDirection: 'row',
@@ -475,7 +486,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontSize: 10,
     fontWeight: '600',
-    color: '#94a3b8',
+    color: colors.textMuted,
   },
   actionBtn: {
     flex: 1,
@@ -483,13 +494,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    backgroundColor: '#ecfdf5',
+    backgroundColor: colors.accentBg,
     paddingVertical: 12,
     borderRadius: 12,
   },
   actionBtnText: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#059669',
+    color: colors.accentText,
   },
 });

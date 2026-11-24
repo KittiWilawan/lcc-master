@@ -1,0 +1,23 @@
+{
+  "columns": 96,
+  "rows": 72,
+  "lumaDelta": 16,
+  "minChangedFraction": 0.05,
+  "minChangedCells": 3,
+  "discoveryMinCells": 8,
+  "discoveryExtent": 0.38,
+  "uprightMinVisibility": 0.65,
+  "uprightMinVerticalCosine": 0.82,
+  "legChains": [[11, 23, 25, 27], [12, 24, 26, 28]],
+  "minimumDescentFraction": 0.30,
+  "maximumFootShiftFraction": 0.40,
+  "landingMinScaleRatio": 0.40,
+  "landingMaxTravel": 3.0,
+  "landingProneCosine": 0.55,
+  "landingShoulderDrop": 0.60,
+  "landingCenterDrop": 0.40,
+  "landingMaxFootShift": 0.60,
+  "landingPartialLegVisibility": 0.25,
+  "uprightLandingReferences": 2,
+  "restingPose": {"knee": 0.1, "hipDrop": 0.08, "samples": 2, "fraction": 0.5, "extended": 0.3, "horizontalSamples": 4, "maxHipSpread": 0.4, "shrinkRatio": 0.5}
+}

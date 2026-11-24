@@ -1,0 +1,7 @@
+{
+  "pinLength": 4,
+  "minimumPasswordLength": 8,
+  "emailDomains": [],
+  "notificationTestDelaySeconds": 3,
+  "notificationTestChannel": "looklancare-notification-test"
+}

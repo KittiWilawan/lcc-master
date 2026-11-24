@@ -1,3 +1,4 @@
+import { CareText as Text } from '../../components/CareText';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCameraPermissions } from 'expo-camera';
@@ -6,21 +7,19 @@ import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Animated,
-  Dimensions,
+  useWindowDimensions,
   KeyboardAvoidingView,
   Modal,
   Platform,
   ScrollView,
   StyleSheet,
-  Switch,
-  Text,
   TextInput,
   TouchableOpacity,
   View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AppAlert as Alert } from '../../lib/appAlert';
 import { MonitoredCameraFeed } from '../../components/MonitoredCameraFeed';
 import { FalseAlarmCountdownModal } from '../../components/FalseAlarmCountdownModal';
 import { FullScreenCameraModal } from '../../components/FullScreenCameraModal';
@@ -32,16 +31,21 @@ import {
   sendLocalSOSNotification,
 } from '../../lib/pushNotifications';
 import { playEmergencySiren, speakCalmingMessage } from '../../lib/emergencyAudio';
-import { describeCameraAttribution, getAnalysisIntervalMs, getCaptureQuality } from '../../lib/cameraAnalysis';
+import { describeCameraAttribution } from '../../lib/cameraAnalysis';
 import { supabase } from '../../lib/supabase';
 import { describeMonitorHealth, loadMonitorHealth } from '../../lib/monitorHealth';
 import { getFriendlyErrorMessage } from '../../lib/friendlyError';
 import { testCameraConnection } from '../../lib/cameraConnectionTest';
 import { callPhoneNumber, getEmergencyPhoneNumber } from '../../lib/phone';
-import { getNativeCameraCapabilities, hasNativeCameraMonitoring, isCameraMonitorReady, isCameraMonitorSlow, requestCameraMonitoringRefresh, useCameraMonitoringStates } from '../../lib/cameraMonitoring';
-import { getTrackedMemberIds, shouldMonitorCamera, usesAllPeopleMode } from '../../lib/monitoringPolicy';
+import { getNativeCameraCapabilities, hasNativeCameraMonitoring, requestCameraMonitoringRefresh, useCameraMonitoringStates } from '../../lib/cameraMonitoring';
+import { getCameraTargetMemberIds, getTrackedMemberIds, shouldMonitorCamera, usesAllPeopleMode } from '../../lib/monitoringPolicy';
+import { describeLiveMonitoring } from '../../lib/monitoringStatus';
+import { MonitoringStatusCard } from '../../components/MonitoringStatusCard';
+import { CameraSourceFields } from '../../components/CameraSourceFields';
+import { SetupReturnButton } from '../../components/SetupReturnButton';
+import { useMonitoringClock } from '../../lib/useMonitoringClock';
+import readability from '../../config/readability.json';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 interface CameraItem {
   id: string;
@@ -56,7 +60,8 @@ interface CameraItem {
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const { openCameraSetup } = useLocalSearchParams<{ openCameraSetup?: string }>();
+  const { width: screenWidth } = useWindowDimensions();
+  const { openCameraSetup, setup } = useLocalSearchParams<{ openCameraSetup?: string; setup?: string }>();
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const { colors, isDarkMode, seniorMode } = useTheme();
@@ -70,6 +75,7 @@ export default function DashboardScreen() {
   const [cameras, setCameras] = useState<CameraItem[]>([]);
   const [loadingCameras, setLoadingCameras] = useState(true);
   const nativeCameraStates = useCameraMonitoringStates();
+  const statusTime = useMonitoringClock();
   const [fullscreenCam, setFullscreenCam] = useState<CameraItem | null>(null);
   const [activeAlertCamId, setActiveAlertCamId] = useState<string | null>(null);
   const [permission, requestPermission] = useCameraPermissions();
@@ -79,7 +85,7 @@ export default function DashboardScreen() {
   const [newCamType, setNewCamType] = useState<'video' | 'device' | 'rtsp'>('rtsp');
   const [newCamUrl, setNewCamUrl] = useState('');
   const [newSnapshotUrl, setNewSnapshotUrl] = useState('');
-  const [showAdvancedCamera, setShowAdvancedCamera] = useState(false);
+  const [showCameraPeople, setShowCameraPeople] = useState(false);
   const [assignedMemberId, setAssignedMemberId] = useState<string>('');
   const [cameraTest, setCameraTest] = useState<{ state: 'idle' | 'testing' | 'success' | 'error'; message: string; source?: string }>({ state: 'idle', message: '' });
   const [savingCamera, setSavingCamera] = useState(false);
@@ -91,6 +97,7 @@ export default function DashboardScreen() {
   const [events, setEvents] = useState<{ id: number; time: string; title: string; subtitle: string; isAlert: boolean }[]>([]);
   const [members, setMembers] = useState<any[]>([]);
   const [loadingMembers, setLoadingMembers] = useState(true);
+  const [scopeUnavailable, setScopeUnavailable] = useState(false);
   const [userProfile, setUserProfile] = useState<any>(null);
   const [emergencyContact, setEmergencyContact] = useState<{ name: string; phone: string } | null>(null);
 
@@ -130,7 +137,6 @@ export default function DashboardScreen() {
   }, [isFocused, homeWorkerMode]);
 
   // Animations
-  const pulseAnim = useMemo(() => new Animated.Value(1), []);
   const glowAnim = useMemo(() => new Animated.Value(0.3), []);
 
   const loadCameras = useCallback(async () => {
@@ -172,21 +178,21 @@ export default function DashboardScreen() {
 
   const handleAddCamera = async () => {
     if (savingCameraRef.current) return;
-    if (trackedCount > 0 && !assignedMemberId) {
-      Alert.alert('เลือกผู้รับการดูแล', 'กล้องต้องมีผู้รับการดูแลหลัก เพื่อให้ข้อความแจ้งเตือนไม่ระบุชื่อผิดคน');
+    if (loadingMembers || scopeUnavailable) {
+      Alert.error('ยังเพิ่มกล้องไม่ได้', 'กรุณาตรวจว่ามีครอบครัวและโหลดรายชื่อคนที่เฝ้าดูสำเร็จก่อน');
       return;
     }
     const assignedMember = careRecipients.find((member) => member.id === assignedMemberId);
-    if (trackedCount > 0 && !assignedMember) {
-      Alert.alert('ไม่พบผู้รับการดูแล', 'กรุณาเพิ่มผู้รับการดูแลก่อนเพิ่มกล้อง');
+    if (assignedMemberId && !assignedMember) {
+      Alert.error('ไม่พบผู้รับการดูแล', 'กรุณาเพิ่มผู้รับการดูแลก่อนเพิ่มกล้อง');
       return;
     }
     if (trackedCount > 0 && assignedMember && !assignedMember.is_tracked) {
-      Alert.alert('ยังไม่ได้เลือกให้เฝ้าดู', `เปิด “รวมในการเฝ้าดู” ให้ ${assignedMember.display_name} ก่อน`);
+      Alert.error('ยังไม่ได้เลือกให้เฝ้าดู', `เปิด “เฝ้าดูคนนี้” ให้ ${assignedMember.display_name} ก่อน`);
       return;
     }
     if (newCamType === 'device' && cameras.some((camera) => camera.type === 'device')) {
-      Alert.alert('มีกล้องมือถือแล้ว', 'อุปกรณ์หนึ่งเครื่องเปิดกล้องได้ครั้งละหนึ่งตัว');
+      Alert.error('มีกล้องมือถือแล้ว', 'อุปกรณ์หนึ่งเครื่องเปิดกล้องได้ครั้งละหนึ่งตัว');
       return;
     }
     if (newCamType !== 'device') {
@@ -194,19 +200,19 @@ export default function DashboardScreen() {
       try {
         parsedUrl = new URL(newCamUrl.trim());
       } catch {
-        Alert.alert('URL ไม่ถูกต้อง', 'กรุณาระบุ URL ของสตรีมกล้อง');
+        Alert.error('URL ไม่ถูกต้อง', 'กรุณาระบุ URL ของสตรีมกล้อง');
         return;
       }
       if (newCamType === 'video' && homeWorkerMode && !newSnapshotUrl.trim()) {
-        Alert.alert('ยังไม่มีภาพสำหรับ AI', 'วิดีโอทดสอบต้องมีลิงก์ภาพนิ่งสำหรับ AI');
+        Alert.error('ยังไม่มีภาพสำหรับ AI', 'วิดีโอทดสอบต้องมีลิงก์ภาพนิ่งสำหรับ AI');
         return;
       }
       if (cameraTest.state !== 'success' || cameraTest.source !== newCamUrl.trim()) {
-        Alert.alert('กรุณาทดสอบกล้องก่อน', 'กด “ทดสอบการเชื่อมต่อ” และรอให้ขึ้นว่าพร้อมใช้งาน');
+        Alert.error('กรุณาทดสอบกล้องก่อน', 'กด “ทดสอบการเชื่อมต่อ” และรอให้ขึ้นว่าพร้อมใช้งาน');
         return;
       }
       if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') {
-        Alert.alert('สตรีมยังไม่รองรับ', 'กรุณาแปลง RTSP/RTMP เป็น HLS ผ่านเกตเวย์ แล้วใส่ URL HTTP หรือ HTTPS');
+        Alert.error('สตรีมยังไม่รองรับ', 'กรุณาแปลง RTSP/RTMP เป็น HLS ผ่านเกตเวย์ แล้วใส่ URL HTTP หรือ HTTPS');
         return;
       }
     }
@@ -215,7 +221,7 @@ export default function DashboardScreen() {
         const parsedSnapshot = new URL(newSnapshotUrl.trim());
         if (parsedSnapshot.protocol !== 'https:' && parsedSnapshot.protocol !== 'http:') throw new Error();
       } catch {
-        Alert.alert('URL ภาพนิ่งไม่ถูกต้อง', 'กรุณาใช้ URL HTTP หรือ HTTPS ที่ส่งภาพ JPEG/PNG');
+        Alert.error('URL ภาพนิ่งไม่ถูกต้อง', 'กรุณาใช้ URL HTTP หรือ HTTPS ที่ส่งภาพ JPEG/PNG');
         return;
       }
     }
@@ -292,11 +298,12 @@ export default function DashboardScreen() {
       setNewCamName('');
       setNewCamUrl('');
       setNewSnapshotUrl('');
-      setShowAdvancedCamera(false);
+      setShowCameraPeople(false);
       setAssignedMemberId('');
       setCameraTest({ state: 'idle', message: '' });
+      if (setup === 'true') router.navigate('/setup-guide');
     } catch (err) {
-      Alert.alert('เพิ่มกล้องไม่สำเร็จ', getFriendlyErrorMessage(err, 'ตรวจข้อมูลกล้องแล้วลองอีกครั้ง'));
+      Alert.error('เพิ่มกล้องไม่สำเร็จ', getFriendlyErrorMessage(err, 'ตรวจข้อมูลกล้องแล้วลองอีกครั้ง'));
     } finally {
       savingCameraRef.current = false;
       setSavingCamera(false);
@@ -339,7 +346,7 @@ export default function DashboardScreen() {
     try {
       setLoadingMembers(true);
       const familyId = await AsyncStorage.getItem('familyId');
-      if (!familyId) return;
+      if (!familyId) { setMembers([]); setScopeUnavailable(true); return; }
 
       const { data, error } = await supabase
         .from('family_members')
@@ -347,10 +354,12 @@ export default function DashboardScreen() {
         .eq('family_id', familyId)
         .order('created_at', { ascending: true });
 
-      if (!error && data) {
-        setMembers(data);
-      }
+      if (error || !data) throw error ?? new Error('ไม่มีข้อมูลครอบครัว');
+      setMembers(data);
+      setScopeUnavailable(false);
     } catch (e) {
+      setMembers([]);
+      setScopeUnavailable(true);
       console.log('Error loading members:', e);
     } finally {
       setLoadingMembers(false);
@@ -370,40 +379,19 @@ export default function DashboardScreen() {
   useEffect(() => {
     void registerForPushNotificationsAsync();
 
-    // Pulse animation for AI status dot
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, { toValue: 1.4, duration: 800, useNativeDriver: true }),
-        Animated.timing(pulseAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
-      ])
-    ).start();
-
     // Glow animation for live indicator
-    Animated.loop(
+    const glow = Animated.loop(
       Animated.sequence([
         Animated.timing(glowAnim, { toValue: 1, duration: 1000, useNativeDriver: true }),
         Animated.timing(glowAnim, { toValue: 0.3, duration: 1000, useNativeDriver: true }),
       ])
-    ).start();
-  }, [pulseAnim, glowAnim]);
-
-  const toggleTracking = async (id: string, currentVal: boolean) => {
-    setMembers(prev => prev.map(m => m.id === id ? { ...m, is_tracked: !currentVal } : m));
-
-    const { error } = await supabase
-      .from('family_members')
-      .update({ is_tracked: !currentVal })
-      .eq('id', id);
-
-    if (error) {
-      setMembers(prev => prev.map(m => m.id === id ? { ...m, is_tracked: currentVal } : m));
-      console.error(error);
-    }
-    requestCameraMonitoringRefresh();
-  };
+    );
+    glow.start();
+    return () => glow.stop();
+  }, [glowAnim]);
 
   const confirmDeleteCamera = (camId: string, camName: string) => {
-    Alert.alert(
+    Alert.confirm(
       'ยืนยันการลบกล้อง',
       `คุณแน่ใจหรือไม่ว่าต้องการลบกล้อง "${camName}" ออก?`,
       [
@@ -420,7 +408,7 @@ export default function DashboardScreen() {
               requestCameraMonitoringRefresh();
               await AsyncStorage.setItem('@family_cameras', JSON.stringify(updated));
             } catch (delErr) {
-              Alert.alert('ลบกล้องไม่สำเร็จ', getFriendlyErrorMessage(delErr));
+              Alert.error('ลบกล้องไม่สำเร็จ', getFriendlyErrorMessage(delErr));
             }
           },
         },
@@ -432,9 +420,9 @@ export default function DashboardScreen() {
   const callEmergencyService = async () => {
     try {
       const opened = await callPhoneNumber(getEmergencyPhoneNumber());
-      if (!opened) Alert.alert('โทรออกไม่ได้', 'อุปกรณ์นี้ไม่รองรับการโทร กรุณาใช้โทรศัพท์โทรหาเบอร์ฉุกเฉิน');
+      if (!opened) Alert.error('โทรออกไม่ได้', 'อุปกรณ์นี้ไม่รองรับการโทร กรุณาใช้โทรศัพท์โทรหาเบอร์ฉุกเฉิน');
     } catch (error) {
-      Alert.alert('โทรออกไม่ได้', getFriendlyErrorMessage(error));
+      Alert.error('โทรออกไม่ได้', getFriendlyErrorMessage(error));
     }
   };
 
@@ -445,7 +433,7 @@ export default function DashboardScreen() {
       return;
     }
     const opened = await callPhoneNumber(emergencyContact.phone);
-    if (!opened) Alert.alert('โทรออกไม่ได้', 'กรุณาตรวจเบอร์ผู้ติดต่อฉุกเฉินในหน้าโปรไฟล์');
+    if (!opened) Alert.error('โทรออกไม่ได้', 'กรุณาตรวจเบอร์ผู้ติดต่อฉุกเฉินในหน้าโปรไฟล์');
   };
 
   const triggerEmergencySOS = async () => {
@@ -524,19 +512,12 @@ export default function DashboardScreen() {
   const careRecipients = members.filter(m => !m.user_id);
   const trackedCount = careRecipients.filter(m => m.is_tracked).length;
   const trackedMemberIds = getTrackedMemberIds(careRecipients);
+  const onlyTracked = trackedMemberIds.size === 1 ? careRecipients.find(member => trackedMemberIds.has(member.id)) : undefined;
   const allPeopleMode = usesAllPeopleMode(trackedMemberIds);
-  const nativeAi = !homeWorkerMode && hasNativeCameraMonitoring();
-  const aiConfigured = nativeAi || Boolean(!homeWorkerMode && process.env.EXPO_PUBLIC_AI_FUNCTION_NAME && getAnalysisIntervalMs() && getCaptureQuality() &&
-    Number(process.env.EXPO_PUBLIC_AI_FALL_CONFIDENCE) > 0 && Number(process.env.EXPO_PUBLIC_AI_FALL_CONFIDENCE) <= 1 &&
-    Number.isInteger(Number(process.env.EXPO_PUBLIC_AI_CONFIRMATIONS)) && Number(process.env.EXPO_PUBLIC_AI_CONFIRMATIONS) > 0);
-  const monitoringCount = aiConfigured
-    ? cameras.filter((camera) => shouldMonitorCamera(camera, trackedMemberIds) &&
-      (!nativeAi || (camera.type !== 'device' && isCameraMonitorReady(nativeCameraStates[camera.id])))).length : 0;
-  const backgroundMonitoringActive = nativeAi && monitoringCount > 0;
-  const backgroundMonitoringError = Object.values(nativeCameraStates).some((state) => state.state === 'ai_error')
-    ? 'AI บนอุปกรณ์ตรวจไม่ได้ กรุณาตรวจสถานะกล้อง'
-    : Object.values(nativeCameraStates).some(isCameraMonitorSlow)
-      ? 'AI ประมวลผลช้าและอาจพลาดเหตุล้ม · ลองลดจำนวนกล้องหรือใช้เครื่องที่เร็วขึ้น' : '';
+  const liveSummary = describeLiveMonitoring({ cameras, states: nativeCameraStates, targetIds: trackedMemberIds,
+    singleTarget: onlyTracked && { id: onlyTracked.id, name: onlyTracked.display_name }, scopeUnavailable,
+    nativeMode: hasNativeCameraMonitoring() && !homeWorkerMode, workerOnline: monitorSummary.online,
+    loading: loadingCameras || loadingMembers, now: statusTime });
 
 
   return (
@@ -554,9 +535,8 @@ export default function DashboardScreen() {
                 style={styles.logo}
                 contentFit="cover"
               />
-              <View style={styles.logoOnlineDot} />
             </View>
-            <View>
+            <View style={styles.brandText}>
               <Text style={[styles.appName, seniorMode && styles.seniorAppName, { color: colors.textPrimary }]}>LookLanCare</Text>
               <Text style={[styles.familyName, seniorMode && styles.seniorFamilyName, { color: colors.textSecondary }]}>ดูแลคนที่คุณรัก</Text>
             </View>
@@ -571,7 +551,7 @@ export default function DashboardScreen() {
                 </View>
               )}
             </TouchableOpacity>
-            <TouchableOpacity style={styles.profileBtn} onPress={() => router.push('/profile')}>
+            <TouchableOpacity style={styles.profileBtn} onPress={() => router.push('/profile')} accessibilityRole="button" accessibilityLabel="เปิดโปรไฟล์และการตั้งค่า">
               {userProfile?.avatar_url ? (
                 <Image source={{ uri: userProfile.avatar_url }} style={styles.profileAvatar} />
               ) : (
@@ -582,40 +562,26 @@ export default function DashboardScreen() {
         </View>
 
         <ScrollView contentContainerStyle={[styles.scrollContent, { backgroundColor: colors.background }]} showsVerticalScrollIndicator={false}>
+          {setup === 'true' && <SetupReturnButton />}
 
           {seniorMode ? (
             <View style={styles.seniorDashboard}>
-              <View style={[styles.seniorWelcomeCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-                <MaterialCommunityIcons name="hand-wave-outline" size={36} color="#047857" />
-                <Text style={[styles.seniorWelcomeTitle, { color: colors.textPrimary }]}>สวัสดี วันนี้ระบบเป็นอย่างไร</Text>
-                <View style={[styles.seniorStatusPill, (homeWorkerMode ? monitorSummary.online : monitoringCount > 0) && styles.seniorStatusPillReady]}>
-                  <MaterialCommunityIcons
-                    name={(homeWorkerMode ? monitorSummary.online : monitoringCount > 0) ? 'check-circle' : 'alert-circle'}
-                    size={26}
-                    color={(homeWorkerMode ? monitorSummary.online : monitoringCount > 0) ? '#166534' : '#92400e'}
-                  />
-                  <Text style={styles.seniorStatusText}>
-                    {(homeWorkerMode ? monitorSummary.online : monitoringCount > 0) ? 'ระบบกำลังดูแลอยู่' : 'มีบางอย่างที่ต้องตั้งค่า'}
-                  </Text>
-                </View>
-                <Text style={[styles.seniorInstruction, { color: colors.textSecondary }]}>แตะปุ่มใหญ่ด้านล่างตามสิ่งที่ต้องการทำ</Text>
-              </View>
-
               <TouchableOpacity
-                style={[styles.seniorActionButton, styles.seniorStatusButton]}
-                onPress={() => router.push('/setup-guide')}
+                style={[styles.seniorActionButton, styles.seniorEmergencyButton]}
+                onPress={triggerEmergencySOS}
                 accessibilityRole="button"
-                accessibilityLabel="ดูสถานะระบบ"
+                accessibilityLabel="ขอความช่วยเหลือฉุกเฉิน"
               >
                 <View style={styles.seniorActionIcon}>
-                  <MaterialCommunityIcons name="shield-check-outline" size={34} color="#ffffff" />
+                  <MaterialCommunityIcons name="alert-octagon" size={36} color="#ffffff" />
                 </View>
                 <View style={styles.seniorActionText}>
-                  <Text style={styles.seniorActionTitle}>ดูสถานะระบบ</Text>
-                  <Text style={styles.seniorActionSubtitle}>ตรวจว่ากล้องและการแจ้งเตือนพร้อมหรือไม่</Text>
+                  <Text style={styles.seniorActionTitle}>ขอความช่วยเหลือ</Text>
+                  <Text style={styles.seniorActionSubtitle}>แจ้งผู้ดูแลทันทีเมื่อเกิดเหตุฉุกเฉิน</Text>
                 </View>
-                <MaterialCommunityIcons name="chevron-right" size={32} color="#ffffff" />
               </TouchableOpacity>
+
+              <MonitoringStatusCard summary={liveSummary} onSettings={() => router.push('/setup-guide')} />
 
               <TouchableOpacity
                 style={[styles.seniorActionButton, styles.seniorContactButton]}
@@ -630,23 +596,6 @@ export default function DashboardScreen() {
                   <Text style={styles.seniorActionTitle}>{emergencyContact ? `โทรหา ${emergencyContact.name}` : 'ตั้งค่าเบอร์ผู้ดูแล'}</Text>
                   <Text style={styles.seniorActionSubtitle}>{emergencyContact ? emergencyContact.phone : 'เพิ่มเบอร์ญาติหรือผู้ดูแลหลัก'}</Text>
                 </View>
-                <MaterialCommunityIcons name="chevron-right" size={32} color="#ffffff" />
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.seniorActionButton, styles.seniorEmergencyButton]}
-                onPress={triggerEmergencySOS}
-                accessibilityRole="button"
-                accessibilityLabel="ขอความช่วยเหลือฉุกเฉิน"
-              >
-                <View style={styles.seniorActionIcon}>
-                  <MaterialCommunityIcons name="alert-octagon" size={36} color="#ffffff" />
-                </View>
-                <View style={styles.seniorActionText}>
-                  <Text style={styles.seniorActionTitle}>ขอความช่วยเหลือ</Text>
-                  <Text style={styles.seniorActionSubtitle}>แจ้งผู้ดูแลทันทีเมื่อเกิดเหตุฉุกเฉิน</Text>
-                </View>
-                <MaterialCommunityIcons name="chevron-right" size={32} color="#ffffff" />
               </TouchableOpacity>
             </View>
           ) : (
@@ -655,124 +604,18 @@ export default function DashboardScreen() {
           {/* =========================================================
               AI STATUS BANNER - Gradient-like card
              ========================================================= */}
-          <View style={styles.aiBanner}>
-            <View style={styles.aiBannerBg}>
-              {/* Decorative circles */}
-              <View style={[styles.decorCircle, { top: -20, right: -20, opacity: 0.08 }]} />
-              <View style={[styles.decorCircle, { bottom: -30, left: -10, opacity: 0.05, width: 100, height: 100 }]} />
+          <MonitoringStatusCard summary={liveSummary} onSettings={() => router.push('/setup-guide')} />
 
-              <View style={styles.aiBannerContent}>
-                <View style={styles.aiBannerLeft}>
-                  <View style={styles.aiIconCircle}>
-                    <MaterialCommunityIcons name="shield-check" size={28} color="#ffffff" />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.aiBannerTitle}>{homeWorkerMode ? monitorSummary.title : backgroundMonitoringActive ? 'AI กำลังเฝ้าระวังเบื้องหลัง' : monitoringCount > 0 ? 'กำลังเปิดการเฝ้าระวัง' : 'ยังไม่ได้เปิดการตรวจภาพด้วย AI'}</Text>
-                    <Text style={styles.aiBannerSubtitle}>
-                      {homeWorkerMode ? monitorSummary.subtitle : backgroundMonitoringError || (monitoringCount > 0
-                        ? `กล้อง ${monitoringCount} ตัว · ${allPeopleMode ? 'ตรวจทุกคนในภาพ' : hasNativeCameraMonitoring() && !homeWorkerMode ? 'ตรวจคนในพื้นที่ที่เลือก · ยังไม่ยืนยันชื่อ' : `ดูแลบุคคลเป้าหมาย ${trackedCount} คน`}`
-                        : 'ยังไม่มีกล้องที่พร้อมให้ AI ตรวจภาพ')}
-                    </Text>
-                  </View>
-                </View>
-                <View style={styles.aiStatusIndicator}>
-                  {(homeWorkerMode ? monitorSummary.online : monitoringCount > 0) && <Animated.View style={[styles.aiPulse, { transform: [{ scale: pulseAnim }] }]} />}
-                  <View style={[styles.aiDotActive, !(homeWorkerMode ? monitorSummary.online : monitoringCount > 0) && { backgroundColor: '#cbd5e1' }]} />
-                </View>
-              </View>
-
-              {/* Quick action chips */}
-              <View style={styles.chipRow}>
-                <View style={styles.chip}>
-                  <MaterialCommunityIcons name="cctv" size={14} color="#059669" />
-                  <Text style={styles.chipText}>กล้อง {cameras.length} ตัว</Text>
-                </View>
-                <View style={styles.chip}>
-                  <MaterialCommunityIcons name="wifi" size={14} color="#059669" />
-                  <Text style={styles.chipText}>{homeWorkerMode ? monitorSummary.online ? 'คอมออนไลน์' : 'คอมยังไม่พร้อม' : 'ตรวจสอบสถานะบนภาพ'}</Text>
-                </View>
-                <View style={[styles.chip, monitoringCount > 0 && styles.chipActive]}>
-                  <MaterialCommunityIcons name="brain" size={14} color={monitoringCount > 0 ? '#ffffff' : '#059669'} />
-                  <Text style={[styles.chipText, monitoringCount > 0 && { color: '#ffffff' }]}>{homeWorkerMode ? monitorSummary.online ? 'AI กำลังตรวจภาพ' : 'AI ยังไม่พร้อม' : monitoringCount > 0 ? 'ดูผล AI บนภาพ' : 'AI ยังไม่พร้อม'}</Text>
-                </View>
-              </View>
-            </View>
-          </View>
-
-          <TouchableOpacity
-            style={[styles.readinessButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
-            onPress={() => router.push('/setup-guide')}
-            accessibilityRole="button"
-            accessibilityLabel="ตรวจสอบความพร้อมของระบบทั้งหมด"
-          >
-            <View style={styles.readinessButtonIcon}>
-              <MaterialCommunityIcons name="clipboard-check-outline" size={23} color="#ffffff" />
-            </View>
-            <View style={styles.readinessButtonText}>
-              <Text style={[styles.readinessButtonTitle, { color: colors.textPrimary }]}>ตรวจสอบความพร้อมของระบบ</Text>
-              <Text style={[styles.readinessButtonSubtitle, { color: colors.textSecondary }]}>เช็กบัญชี คนที่ดูแล กล้อง คอม และการแจ้งเตือนในหน้าเดียว</Text>
-            </View>
-            <MaterialCommunityIcons name="chevron-right" size={24} color={colors.textMuted} />
-          </TouchableOpacity>
-
-          {/* =========================================================
-              3-STEP USER-FRIENDLY QUICK GUIDE CARD
-             ========================================================= */}
-          <View style={{ backgroundColor: colors.card, borderRadius: 20, padding: 17, marginBottom: 23, borderWidth: 1, borderColor: colors.cardBorder }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9, marginBottom: 14 }}>
-              <MaterialCommunityIcons name="compass-outline" size={21} color={colors.accentText} />
-              <Text style={{ fontSize: 16, fontWeight: '800', color: colors.textPrimary }}>เริ่มดูแลใน 3 ขั้นตอน</Text>
-            </View>
-
-            <View style={{ gap: 10 }}>
-              <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: isDarkMode ? '#1e293b' : '#f3f8f5', padding: 13, borderRadius: 13 }} onPress={() => router.push('/members')}>
-                <View style={{ width: 30, height: 30, borderRadius: 11, backgroundColor: '#168765', justifyContent: 'center', alignItems: 'center' }}>
-                  <Text style={{ color: '#fff', fontSize: 13, fontWeight: '900' }}>1</Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 14, fontWeight: '700', color: colors.textPrimary }}>เลือกบุคคลเป้าหมาย (ถ้าต้องการ)</Text>
-                  <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 2 }}>ไม่เลือกใคร AI จะตรวจทุกคนในภาพ</Text>
-                </View>
-                <MaterialCommunityIcons name="chevron-right" size={20} color={colors.textMuted} />
-              </TouchableOpacity>
-
-              <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: isDarkMode ? '#1e293b' : '#f3f8f5', padding: 13, borderRadius: 13 }} onPress={() => setShowAddCameraModal(true)}>
-                <View style={{ width: 30, height: 30, borderRadius: 11, backgroundColor: '#168765', justifyContent: 'center', alignItems: 'center' }}>
-                  <Text style={{ color: '#fff', fontSize: 13, fontWeight: '900' }}>2</Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 14, fontWeight: '700', color: colors.textPrimary }}>เพิ่มกล้องที่ต้องการเฝ้าดู</Text>
-                  <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 2 }}>เลือกชื่อเมื่อใช้โหมดบุคคลเป้าหมาย</Text>
-                </View>
-                <MaterialCommunityIcons name="chevron-right" size={20} color={colors.textMuted} />
-              </TouchableOpacity>
-
-              <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: isDarkMode ? '#1e293b' : '#f3f8f5', padding: 13, borderRadius: 13 }} onPress={() => router.push('/profile')}>
-                <View style={{ width: 30, height: 30, borderRadius: 11, backgroundColor: '#168765', justifyContent: 'center', alignItems: 'center' }}>
-                  <Text style={{ color: '#fff', fontSize: 13, fontWeight: '900' }}>3</Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 14, fontWeight: '700', color: colors.textPrimary }}>เปิดรับแจ้งเตือน</Text>
-                  <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 2 }}>ผู้ดูแลเปิดในมือถือของตนเอง</Text>
-                </View>
-                <MaterialCommunityIcons name="chevron-right" size={20} color={colors.textMuted} />
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* =========================================================
-              CAMERA SECTION - Premium dark card
-             ========================================================= */}
           <View style={styles.sectionHeader}>
             <View style={styles.sectionTitleRow}>
               <MaterialCommunityIcons name="cctv" size={18} color="#059669" />
-              <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>กล้องวงจรปิด</Text>
+              <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>กล้องของฉัน</Text>
             </View>
-            <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
-              <TouchableOpacity onPress={() => setShowAddCameraModal(true)}>
+            <View style={styles.sectionActions}>
+              <TouchableOpacity style={styles.sectionActionButton} onPress={() => setShowAddCameraModal(true)} accessibilityRole="button" accessibilityLabel="เพิ่มกล้อง">
                 <Text style={styles.sectionAction}>+ เพิ่มกล้อง</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => router.push('/all-cameras')}>
+              <TouchableOpacity style={styles.sectionActionButton} onPress={() => router.push('/all-cameras')} accessibilityRole="button" accessibilityLabel="ดูกล้องทั้งหมด">
                 <Text style={[styles.sectionAction, { color: '#64748b' }]}>ดูทั้งหมด</Text>
               </TouchableOpacity>
             </View>
@@ -784,8 +627,8 @@ export default function DashboardScreen() {
                 <MaterialCommunityIcons name="cctv" size={26} color={colors.accentText} />
               </View>
               <Text style={{ color: colors.textPrimary, fontSize: 16, fontWeight: '800' }}>ยังไม่มีกล้องในบ้าน</Text>
-              <Text style={{ color: colors.textSecondary, textAlign: 'center', fontSize: 12, marginTop: 5, marginBottom: 15 }}>เชื่อมเว็บแคมหรือ CCTV แล้วเลือกผู้สูงอายุที่กล้องนี้ดูแล</Text>
-              <TouchableOpacity onPress={() => setShowAddCameraModal(true)} style={{ backgroundColor: '#168765', borderRadius: 11, paddingHorizontal: 19, paddingVertical: 10 }}>
+              <Text style={{ color: colors.textSecondary, textAlign: 'center', fontSize: 12, marginTop: 5, marginBottom: 15 }}>เริ่มด้วยลิงก์ภาพสดจากกล้อง เลือกตรวจทุกคนหรือเฉพาะคนได้ในหน้าคนที่ดูแล</Text>
+              <TouchableOpacity onPress={() => setShowAddCameraModal(true)} style={{ backgroundColor: '#168765', borderRadius: 11, minHeight: readability.touchTargetSize, justifyContent: 'center', paddingHorizontal: 19, paddingVertical: 10 }}>
                 <Text style={{ color: '#fff', fontWeight: '800' }}>เพิ่มกล้อง</Text>
               </TouchableOpacity>
             </View>
@@ -794,12 +637,16 @@ export default function DashboardScreen() {
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 20 }}>
             {cameras.map(cam => {
               const isCamAlerting = activeAlertCamId === cam.id;
+              const cameraTargets = getCameraTargetMemberIds(cam, trackedMemberIds);
+              const onlyPerson = cameraTargets.length === 1 ? careRecipients.find(person => person.id === cameraTargets[0]) : undefined;
+              const scopeLabel = loadingMembers || scopeUnavailable ? 'ยังตรวจรายชื่อไม่ได้' : allPeopleMode ? 'ตรวจทุกคนในภาพ' : onlyPerson
+                ? `เฝ้าดู: ${onlyPerson.display_name}` : `เฝ้าดูคนที่เลือก ${cameraTargets.length} คน`;
               return (
                 <View
                   key={cam.id}
                   style={[
                     styles.cameraCard,
-                    { width: SCREEN_WIDTH - 40, marginRight: 16, marginBottom: 0 },
+                    { width: screenWidth - 40, marginRight: 16, marginBottom: 0 },
                     isCamAlerting && { borderWidth: 3, borderColor: '#ef4444' }
                   ]}
                 >
@@ -826,16 +673,13 @@ export default function DashboardScreen() {
                       <Text style={styles.liveText}>กล้อง</Text>
                     </View>
 
-                    <View style={styles.roomLabel}>
-                      <MaterialCommunityIcons name={cam.type === 'device' ? "cellphone" : "cctv"} size={14} color="#ffffff" />
-                      <Text style={styles.roomLabelText}>{cam.name}</Text>
-                    </View>
-
                     {/* Bottom Right: Fullscreen Expand Only */}
                     <View style={[styles.cameraOverlayControls, { right: 8, bottom: 8, top: undefined }]}>
                       <TouchableOpacity
                         style={styles.cameraControlBtn}
                         onPress={() => setFullscreenCam(cam)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`ขยายภาพกล้อง ${cam.name}`}
                       >
                         <MaterialCommunityIcons name="fullscreen" size={18} color="#ffffff" />
                       </TouchableOpacity>
@@ -843,33 +687,18 @@ export default function DashboardScreen() {
                   </View>
 
                   {/* Camera Info Footer - Clean & Sleek */}
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, backgroundColor: colors.card, borderBottomLeftRadius: 16, borderBottomRightRadius: 16 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <MaterialCommunityIcons name={cam.type === 'device' ? "cellphone" : "cctv"} size={14} color="#059669" />
-                      <Text style={{ fontSize: 12, fontWeight: '700', color: colors.textPrimary }}>{cam.name}</Text>
-                    </View>
-
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      {(allPeopleMode || cam.assigned_member_name) && (
-                        <View style={{ backgroundColor: colors.accentBg, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                          <MaterialCommunityIcons name="account-heart" size={12} color={colors.accentText} />
-                          <Text style={{ fontSize: 10, fontWeight: '700', color: colors.accentText }}>
-                            {allPeopleMode ? 'ตรวจทุกคนในภาพ' : `พื้นที่ของ ${cam.assigned_member_name}`}
-                          </Text>
-                        </View>
-                      )}
-                      <View style={{ backgroundColor: cam.type === 'device' ? '#fef3c7' : '#f1f5f9', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 }}>
-                        <Text style={{ fontSize: 10, fontWeight: '600', color: cam.type === 'device' ? '#92400e' : '#64748b' }}>
-                          {cam.type === 'device' ? 'มือถือ' : 'CCTV'}
-                        </Text>
-                      </View>
-                      <TouchableOpacity
-                        onPress={() => confirmDeleteCamera(cam.id, cam.name)}
-                        style={{ padding: 4 }}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      >
-                        <MaterialCommunityIcons name="trash-can-outline" size={15} color="#ef4444" />
+                  <View style={[styles.cameraFooter, { backgroundColor: colors.card }]}>
+                    <View style={styles.cameraFooterHeading}>
+                      <MaterialCommunityIcons name={cam.type === 'device' ? 'cellphone' : 'cctv'} size={20} color={colors.accentText} />
+                      <Text style={[styles.cameraName, { color: colors.textPrimary }]}>{cam.name}</Text>
+                      <TouchableOpacity onPress={() => confirmDeleteCamera(cam.id, cam.name)} style={styles.cameraDelete}
+                        accessibilityRole="button" accessibilityLabel={`ลบกล้อง ${cam.name}`}>
+                        <MaterialCommunityIcons name="trash-can-outline" size={24} color={colors.dangerText} />
                       </TouchableOpacity>
+                    </View>
+                    <View style={[styles.cameraScope, { backgroundColor: colors.accentBg }]}>
+                      <MaterialCommunityIcons name="account-heart-outline" size={20} color={colors.accentText} />
+                      <Text style={[styles.cameraScopeLabel, { color: colors.accentText }]}>{scopeLabel}</Text>
                     </View>
                   </View>
                 </View>
@@ -919,18 +748,15 @@ export default function DashboardScreen() {
                         <Text style={[styles.roleBadgeText, member.is_tracked && styles.roleBadgeTextActive]}>{member.role}</Text>
                       </View>
                     </View>
+                    <Text style={[styles.trackingLabel, { color: member.is_tracked ? colors.accentText : colors.textSecondary }]}>
+                      {member.is_tracked ? 'เลือกเฝ้าดูไว้' : 'ไม่ได้เลือกเฉพาะคน'}
+                    </Text>
                   </View>
                   <View style={styles.trackingToggle}>
-                    <Text style={[styles.trackingLabel, member.is_tracked && styles.trackingLabelActive]}>
-                      {member.is_tracked ? 'กำลังดูแล' : 'ปิดอยู่'}
-                    </Text>
-                    <Switch
-                      value={member.is_tracked || false}
-                      onValueChange={() => toggleTracking(member.id, member.is_tracked)}
-                      trackColor={{ false: '#e2e8f0', true: '#86efac' }}
-                      thumbColor={member.is_tracked ? '#059669' : '#cbd5e1'}
-                      style={{ transform: [{ scaleX: 0.85 }, { scaleY: 0.85 }] }}
-                    />
+                    <TouchableOpacity accessibilityRole="button" accessibilityLabel={`จัดการการเฝ้าดู ${member.display_name}`}
+                      style={{ minHeight: readability.touchTargetSize, padding: 8, justifyContent: 'center' }} onPress={() => router.push('/members')}>
+                      <Text style={{ color: colors.accentText, fontWeight: '700' }}>ตั้งค่า</Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
               ))
@@ -1010,7 +836,7 @@ export default function DashboardScreen() {
         >
           <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
             <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>เพิ่มกล้องวงจรปิด</Text>
+              <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>เพิ่มกล้อง</Text>
               <TouchableOpacity
                 style={styles.modalCloseButton}
                 onPress={() => setShowAddCameraModal(false)}
@@ -1029,14 +855,21 @@ export default function DashboardScreen() {
 
             <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>ชื่อกล้อง / จุดติดตั้ง</Text>
             <TextInput
-              style={[styles.input, { backgroundColor: colors.inputBg, color: colors.textPrimary }]}
+              style={[styles.input, { backgroundColor: colors.inputBg, color: colors.textPrimary, fontSize: seniorMode ? readability.seniorMinimumFontSize : readability.bodyFontSize }]}
+              accessibilityLabel="ชื่อกล้องหรือจุดติดตั้ง"
               placeholder="เช่น ห้องนั่งเล่น, หน้าบ้าน"
               placeholderTextColor={colors.textMuted}
               value={newCamName}
               onChangeText={setNewCamName}
             />
 
-            <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>พื้นที่นี้ดูแลใคร {trackedCount > 0 && <Text style={{ color: '#dc2626' }}>*</Text>}</Text>
+            <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>คนที่กล้องนี้เฝ้าดู</Text>
+            {loadingMembers || scopeUnavailable ? <View>
+              <Text style={{ color: colors.textSecondary }}>{loadingMembers ? 'กำลังตรวจรายชื่อ…' : 'ยังโหลดรายชื่อคนที่เฝ้าดูไม่ได้'}</Text>
+              {!loadingMembers && <TouchableOpacity style={styles.sectionActionButton} accessibilityRole="button" onPress={() => void loadFamilyMembers()}>
+                <Text style={{ color: colors.accentText }}>โหลดรายชื่ออีกครั้ง</Text>
+              </TouchableOpacity>}
+            </View> : <>
             {allPeopleMode && (
               <View style={{ backgroundColor: colors.accentBg, borderRadius: 12, padding: 12, marginBottom: 10 }}>
                 <Text style={{ color: colors.accentText, fontSize: 13, fontWeight: '800' }}>โหมดตรวจทุกคนเปิดอยู่</Text>
@@ -1045,195 +878,61 @@ export default function DashboardScreen() {
                 </Text>
               </View>
             )}
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
-              {careRecipients.map((m) => {
+            {!allPeopleMode && <>
+              <Text style={{ color: colors.textPrimary, marginBottom: 8 }}>{assignedMemberId
+                ? `เฉพาะ ${careRecipients.find(member => member.id === assignedMemberId)?.display_name ?? 'คนที่เลือก'}`
+                : `ทุกคนที่เปิดเฝ้าดูไว้ ${trackedCount} คน`}</Text>
+              <TouchableOpacity onPress={() => setShowCameraPeople(value => !value)} style={styles.sectionActionButton}
+                accessibilityRole="button" accessibilityState={{ expanded: showCameraPeople }}>
+                <Text style={{ color: colors.accentText, fontWeight: '700' }}>{showCameraPeople ? 'ย่อรายชื่อ' : 'เปลี่ยนคนสำหรับกล้องนี้'}</Text>
+              </TouchableOpacity>
+            </>}
+            {showCameraPeople && !allPeopleMode && (
+            <View style={styles.cameraPersonOptions}>
+              {!allPeopleMode && <TouchableOpacity style={[styles.typeBtn, { backgroundColor: colors.inputBg, minHeight: readability.touchTargetSize }, !assignedMemberId && styles.typeBtnActive]}
+                onPress={() => setAssignedMemberId('')} accessibilityRole="button" accessibilityState={{ selected: !assignedMemberId }}>
+                <Text style={[styles.typeBtnText, { color: colors.textSecondary }, !assignedMemberId && styles.typeBtnTextActive]}>ทุกคนที่เปิดเฝ้าดูไว้</Text>
+              </TouchableOpacity>}
+              {!allPeopleMode && careRecipients.filter(m => m.is_tracked).map((m) => {
                 const isSel = assignedMemberId === m.id;
                 return (
                   <TouchableOpacity
                     key={m.id}
-                    style={[styles.typeBtn, isSel && styles.typeBtnActive, { marginRight: 8 }]}
+                    style={[styles.typeBtn, { backgroundColor: colors.inputBg, minHeight: readability.touchTargetSize }, isSel && styles.typeBtnActive]}
                     onPress={() => setAssignedMemberId(isSel ? '' : m.id)}
                     accessibilityRole="button"
                     accessibilityState={{ selected: isSel }}
-                    accessibilityLabel={`เลือกพื้นที่ดูแลของ ${m.display_name}`}
+                    accessibilityLabel={`ให้กล้องเฝ้าดูเฉพาะ ${m.display_name}`}
                   >
                     <MaterialCommunityIcons name="account-heart" size={16} color={isSel ? '#059669' : '#64748b'} />
-                    <Text style={[styles.typeBtnText, isSel && styles.typeBtnTextActive]}>{m.display_name}</Text>
+                    <Text style={[styles.typeBtnText, { color: colors.textSecondary }, isSel && styles.typeBtnTextActive]}>เฉพาะ {m.display_name}</Text>
                   </TouchableOpacity>
                 );
               })}
-            </ScrollView>
+            </View>
+            )}
+
             <Text style={{ color: colors.textSecondary, fontSize: 11, lineHeight: 17, marginTop: -5, marginBottom: 13 }}>
-              {hasNativeCameraMonitoring() && !homeWorkerMode
-                ? 'AI บนอุปกรณ์ตรวจคนในกล้องที่เลือก ชื่อใช้จัดพื้นที่ดูแล ยังไม่ใช้ยืนยันว่าใครเป็นคนล้ม'
-                : allPeopleMode
-                ? 'เมื่อเปิดเลือกดูแลบุคคลใด ระบบจะเปลี่ยนไปตรวจเฉพาะบุคคลเป้าหมายโดยอัตโนมัติ'
-                : 'ระบบติดตามคนต่อเนื่องแม้หันหลัง แต่จะแจ้งว่าเป็น “พื้นที่ของ...” เพื่อไม่เดาชื่อเมื่อมีหลายคนหรือภาพไม่ชัด'}
+              {allPeopleMode ? 'ต้องการเฝ้าดูเฉพาะคน ให้เลือกคนและสแกนใบหน้าในหน้า “คนที่ดูแล” ก่อน'
+                : 'กล้องนี้จะเทียบใบหน้ากับคนที่เลือก และแจ้งเหตุเมื่อยืนยันได้ว่าเป็นคนนั้น ดูสถานะการยืนยันในหน้าหลัก'}
             </Text>
 
-            <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>ประเภทกล้อง</Text>
-            <View style={styles.typeSelector}>
-              <TouchableOpacity
-                style={[styles.typeBtn, newCamType === 'rtsp' && styles.typeBtnActive]}
-                onPress={() => {
-                  setNewCamType('rtsp');
-                  setCameraTest({ state: 'idle', message: '' });
-                }}
-                accessibilityRole="button"
-                accessibilityState={{ selected: newCamType === 'rtsp' }}
-                accessibilityLabel="เลือกกล้อง CCTV หรือเว็บแคม"
-              >
-                <MaterialCommunityIcons name="ip-network-outline" size={18} color={newCamType === 'rtsp' ? '#059669' : '#64748b'} />
-                <Text style={[styles.typeBtnText, newCamType === 'rtsp' && styles.typeBtnTextActive]}>CCTV / เว็บแคม</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.typeBtn, newCamType === 'video' && styles.typeBtnActive]}
-                onPress={() => {
-                  setNewCamType('video');
-                  setCameraTest({ state: 'idle', message: '' });
-                }}
-                accessibilityRole="button"
-                accessibilityState={{ selected: newCamType === 'video' }}
-                accessibilityLabel="เลือกวิดีโอ MP4"
-              >
-                <MaterialCommunityIcons name="cctv" size={18} color={newCamType === 'video' ? '#059669' : '#64748b'} />
-                <Text style={[styles.typeBtnText, newCamType === 'video' && styles.typeBtnTextActive]}>Video MP4</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.typeBtn, newCamType === 'device' && styles.typeBtnActive]}
-                onPress={() => {
-                  setNewCamType('device');
-                  setCameraTest({ state: 'idle', message: '' });
-                }}
-                accessibilityRole="button"
-                accessibilityState={{ selected: newCamType === 'device' }}
-                accessibilityLabel="เลือกกล้องมือถือเครื่องนี้"
-              >
-                <MaterialCommunityIcons name="webcam" size={18} color={newCamType === 'device' ? '#059669' : '#64748b'} />
-                <Text style={[styles.typeBtnText, newCamType === 'device' && styles.typeBtnTextActive]}>กล้องมือถือเครื่องนี้</Text>
-              </TouchableOpacity>
-            </View>
-
-            {newCamType === 'rtsp' && (
-              <>
-                <Text style={styles.inputLabel}>ลิงก์กล้อง</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="https://camera-gateway.example/live.m3u8"
-                  value={newCamUrl}
-                  onChangeText={(value) => {
-                    setNewCamUrl(value);
-                    setCameraTest({ state: 'idle', message: '' });
-                  }}
-                  autoCapitalize="none"
-                />
-                <Text style={{ fontSize: 10, color: '#64748b', marginTop: -6, marginBottom: 12 }}>
-                  ใส่ HLS (.m3u8) เพียงลิงก์เดียว APK Android จะรับภาพและตรวจล้มบนอุปกรณ์
-                </Text>
-                {Platform.OS !== 'web' ? (
-                  <View style={styles.cameraAddressTip}>
-                    <MaterialCommunityIcons name="wifi" size={18} color="#1d4ed8" />
-                    <Text style={styles.cameraAddressTipText}>
-                      กล้องอยู่บนคอม: ใช้ IP ของคอม เช่น 192.168.1.25 แทน localhost และต่อ Wi-Fi วงเดียวกัน
-                    </Text>
-                  </View>
-                ) : null}
-                {homeWorkerMode ? <TouchableOpacity
-                  style={styles.advancedCameraButton}
-                  onPress={() => setShowAdvancedCamera((current) => !current)}
-                  accessibilityRole="button"
-                  accessibilityState={{ expanded: showAdvancedCamera }}
-                >
-                  <MaterialCommunityIcons name="tune-variant" size={18} color="#475569" />
-                  <Text style={styles.advancedCameraButtonText}>ตัวเลือกเพิ่มเติม</Text>
-                  <MaterialCommunityIcons name={showAdvancedCamera ? 'chevron-up' : 'chevron-down'} size={20} color="#64748b" />
-                </TouchableOpacity> : null}
-              </>
-            )}
-
-            {newCamType === 'video' && (
-              <>
-                <Text style={styles.inputLabel}>ลิงก์วิดีโอ MP4 (URL)</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="https://commondatastorage.googleapis.com/.../sample.mp4"
-                  value={newCamUrl}
-                  onChangeText={(value) => {
-                    setNewCamUrl(value);
-                    setCameraTest({ state: 'idle', message: '' });
-                  }}
-                  autoCapitalize="none"
-                />
-              </>
-            )}
-
-            {newCamType !== 'device' && (
-              <>
-                {homeWorkerMode && (newCamType === 'video' || showAdvancedCamera) ? (
-                  <>
-                    <Text style={styles.inputLabel}>
-                      ลิงก์ภาพนิ่ง JPEG/PNG {newCamType === 'video' ? 'สำหรับ AI' : '(ถ้ามี)'}
-                    </Text>
-                    <TextInput
-                      style={styles.input}
-                      placeholder="https://camera-gateway.example/snapshot.jpg"
-                      value={newSnapshotUrl}
-                      onChangeText={(value) => {
-                        setNewSnapshotUrl(value);
-                        setCameraTest({ state: 'idle', message: '' });
-                      }}
-                      autoCapitalize="none"
-                    />
-                    <Text style={{ fontSize: 10, color: '#64748b', marginTop: -6, marginBottom: 12 }}>
-                      ถ้ามีลิงก์ภาพนิ่ง ระบบจะเลือกใช้ก่อนเพื่อประหยัดแรงคอม
-                    </Text>
-                  </>
-                ) : null}
-                <TouchableOpacity
-                  style={[styles.cameraTestButton, cameraTest.state === 'testing' && { opacity: 0.65 }]}
-                  onPress={() => void handleTestCamera()}
-                  disabled={cameraTest.state === 'testing'}
-                  accessibilityRole="button"
-                  accessibilityLabel="ทดสอบการเชื่อมต่อกล้อง"
-                >
-                  {cameraTest.state === 'testing'
-                    ? <ActivityIndicator size="small" color="#065f46" />
-                    : <MaterialCommunityIcons name="camera-outline" size={20} color="#065f46" />}
-                  <Text style={styles.cameraTestButtonText}>
-                    {cameraTest.state === 'testing' ? 'กำลังทดสอบ...' : 'ทดสอบการเชื่อมต่อ'}
-                  </Text>
-                </TouchableOpacity>
-                {cameraTest.message ? (
-                  <View style={[styles.cameraTestResult, cameraTest.state === 'success' ? styles.cameraTestSuccess : styles.cameraTestError]}>
-                    <MaterialCommunityIcons
-                      name={cameraTest.state === 'success' ? 'check-circle' : 'alert-circle-outline'}
-                      size={18}
-                      color={cameraTest.state === 'success' ? '#15803d' : '#b91c1c'}
-                    />
-                    <Text style={[styles.cameraTestResultText, { color: cameraTest.state === 'success' ? '#166534' : '#991b1b' }]}>{cameraTest.message}</Text>
-                  </View>
-                ) : null}
-                {cameraTest.state === 'success' && newSnapshotUrl.trim() ? (
-                  <View style={styles.cameraPreviewCard}>
-                    <Image
-                      source={{ uri: newSnapshotUrl }}
-                      style={styles.cameraPreviewImage}
-                      contentFit="cover"
-                      cachePolicy="none"
-                    />
-                    <Text style={styles.cameraPreviewLabel}>ภาพล่าสุดที่ AI จะได้รับ</Text>
-                  </View>
-                ) : null}
-              </>
-            )}
+            </>}
+            <CameraSourceFields type={newCamType} onTypeChange={type => {
+              setNewCamType(type); setCameraTest({ state: 'idle', message: '' });
+            }} url={newCamUrl} onUrlChange={value => {
+              setNewCamUrl(value); setCameraTest({ state: 'idle', message: '' });
+            }} snapshotUrl={newSnapshotUrl} onSnapshotChange={value => {
+              setNewSnapshotUrl(value); setCameraTest({ state: 'idle', message: '' });
+            }} homeWorkerMode={homeWorkerMode} test={cameraTest} onTest={() => void handleTestCamera()} saving={savingCamera} />
 
             <TouchableOpacity
-              style={[styles.saveBtn, savingCamera && styles.saveBtnDisabled]}
+              style={[styles.saveBtn, (savingCamera || cameraTest.state === 'testing') && styles.saveBtnDisabled]}
               onPress={handleAddCamera}
-              disabled={savingCamera}
+              disabled={savingCamera || cameraTest.state === 'testing'}
               accessibilityRole="button"
               accessibilityLabel="บันทึกกล้อง"
-              accessibilityState={{ disabled: savingCamera }}
+              accessibilityState={{ disabled: savingCamera || cameraTest.state === 'testing' }}
             >
               {savingCamera ? <ActivityIndicator color="#ffffff" /> : null}
               <Text style={styles.saveBtnText}>{savingCamera ? 'กำลังบันทึก...' : 'บันทึกกล้อง'}</Text>
@@ -1352,7 +1051,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   seniorAppName: {
-    fontSize: 22,
+    fontSize: 17,
     lineHeight: 28,
   },
   seniorFamilyName: {
@@ -1363,45 +1062,6 @@ const styles = StyleSheet.create({
     gap: 16,
     paddingBottom: 20,
   },
-  seniorWelcomeCard: {
-    borderRadius: 24,
-    borderWidth: 1,
-    padding: 22,
-    alignItems: 'center',
-    gap: 12,
-  },
-  seniorWelcomeTitle: {
-    fontSize: 23,
-    lineHeight: 31,
-    fontWeight: '900',
-    textAlign: 'center',
-  },
-  seniorStatusPill: {
-    width: '100%',
-    minHeight: 60,
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    backgroundColor: '#fef3c7',
-  },
-  seniorStatusPillReady: {
-    backgroundColor: '#dcfce7',
-  },
-  seniorStatusText: {
-    color: '#0f172a',
-    fontSize: 18,
-    lineHeight: 25,
-    fontWeight: '900',
-  },
-  seniorInstruction: {
-    fontSize: 16,
-    lineHeight: 24,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
   seniorActionButton: {
     minHeight: 96,
     borderRadius: 22,
@@ -1411,9 +1071,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 14,
   },
-  seniorStatusButton: {
-    backgroundColor: '#047857',
-  },
   seniorContactButton: {
     backgroundColor: '#1d4ed8',
   },
@@ -1421,8 +1078,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#b91c1c',
   },
   seniorActionIcon: {
-    width: 54,
-    height: 54,
+    width: 40,
+    height: 48,
     borderRadius: 17,
     backgroundColor: 'rgba(255,255,255,0.18)',
     alignItems: 'center',
@@ -1444,172 +1101,33 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     fontWeight: '600',
   },
-  readinessButton: {
-    minHeight: 76,
-    borderRadius: 18,
-    borderWidth: 1,
-    marginBottom: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  readinessButtonIcon: {
-    width: 46,
-    height: 46,
-    borderRadius: 15,
-    backgroundColor: '#059669',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  readinessButtonText: {
-    flex: 1,
-  },
-  readinessButtonTitle: {
-    fontSize: 15,
-    fontWeight: '900',
-  },
-  readinessButtonSubtitle: {
-    fontSize: 12,
-    lineHeight: 18,
-    marginTop: 3,
-  },
-  cameraTestButton: {
-    minHeight: 48,
-    borderRadius: 13,
-    borderWidth: 1,
-    borderColor: '#6ee7b7',
-    backgroundColor: '#ecfdf5',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    marginBottom: 10,
-  },
-  cameraAddressTip: {
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#bfdbfe',
-    backgroundColor: '#eff6ff',
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 8,
-    marginBottom: 12,
-  },
-  cameraAddressTipText: {
-    flex: 1,
-    color: '#1e3a8a',
-    fontSize: 12,
-    lineHeight: 18,
-    fontWeight: '600',
-  },
-  advancedCameraButton: {
-    minHeight: 46,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    backgroundColor: '#f8fafc',
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    gap: 8,
-    marginBottom: 14,
-  },
-  advancedCameraButtonText: {
-    flex: 1,
-    color: '#475569',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  cameraTestButtonText: {
-    color: '#065f46',
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  cameraTestResult: {
-    minHeight: 44,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 12,
-  },
-  cameraTestSuccess: {
-    backgroundColor: '#f0fdf4',
-    borderWidth: 1,
-    borderColor: '#86efac',
-  },
-  cameraTestError: {
-    backgroundColor: '#fef2f2',
-    borderWidth: 1,
-    borderColor: '#fecaca',
-  },
-  cameraTestResultText: {
-    flex: 1,
-    fontSize: 12,
-    lineHeight: 18,
-    fontWeight: '700',
-  },
-  cameraPreviewCard: {
-    borderRadius: 16,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#bbf7d0',
-    backgroundColor: '#f0fdf4',
-    marginBottom: 12,
-  },
-  cameraPreviewImage: {
-    width: '100%',
-    height: 160,
-    backgroundColor: '#d1fae5',
-  },
-  cameraPreviewLabel: {
-    color: '#166534',
-    fontSize: 12,
-    fontWeight: '800',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
 
   // ── Header ──
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
+    gap: 8,
     paddingVertical: 14,
     backgroundColor: '#ffffff',
     borderBottomWidth: 1,
     borderBottomColor: '#e2e8f0',
   },
   headerLeft: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
   },
   logoContainer: {
     position: 'relative',
-    marginRight: 12,
+    marginRight: 8,
   },
   logo: {
     width: 42,
     height: 42,
     borderRadius: 14,
-  },
-  logoOnlineDot: {
-    position: 'absolute',
-    bottom: -1,
-    right: -1,
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#22c55e',
-    borderWidth: 2,
-    borderColor: '#ffffff',
   },
   appName: {
     fontSize: 17,
@@ -1617,6 +1135,7 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     letterSpacing: -0.3,
   },
+  brandText: { flex: 1, minWidth: 0 },
   familyName: {
     fontSize: 12,
     color: '#64748b',
@@ -1628,8 +1147,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   notifBtn: {
-    width: 40,
-    height: 40,
+    width: readability.touchTargetSize,
+    height: readability.touchTargetSize,
     borderRadius: 12,
     backgroundColor: '#f8fafc',
     justifyContent: 'center',
@@ -1657,8 +1176,8 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   profileBtn: {
-    width: 40,
-    height: 40,
+    width: readability.touchTargetSize,
+    height: readability.touchTargetSize,
     borderRadius: 12,
     backgroundColor: '#ecfdf5',
     justifyContent: 'center',
@@ -1768,6 +1287,8 @@ const styles = StyleSheet.create({
 
   // ── Section Header ──
   sectionHeader: {
+    flexWrap: 'wrap',
+    gap: 8,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -1775,6 +1296,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
   },
   sectionTitleRow: {
+    flexShrink: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
@@ -1789,6 +1311,16 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#059669',
   },
+
+  sectionActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignItems: 'center' },
+  sectionActionButton: { minHeight: readability.touchTargetSize, paddingVertical: 10, justifyContent: 'center' },
+  cameraFooter: { padding: 12, gap: 8 },
+  cameraFooterHeading: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  cameraName: { flex: 1, fontWeight: '700' },
+  cameraDelete: { minWidth: readability.touchTargetSize, minHeight: readability.touchTargetSize, alignItems: 'center', justifyContent: 'center' },
+  cameraScope: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 10, borderRadius: 10 },
+  cameraScopeLabel: { flex: 1, fontWeight: '700' },
+  cameraPersonOptions: { gap: 8, marginBottom: 12 },
 
   // ── Camera ──
   cameraCard: {
@@ -1866,8 +1398,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   cameraControlBtn: {
-    width: 34,
-    height: 34,
+    width: readability.touchTargetSize,
+    height: readability.touchTargetSize,
     borderRadius: 10,
     backgroundColor: 'rgba(255,255,255,0.12)',
     justifyContent: 'center',
@@ -1876,23 +1408,6 @@ const styles = StyleSheet.create({
   videoPlayer: {
     width: '100%',
     height: '100%',
-  },
-  roomLabel: {
-    position: 'absolute',
-    bottom: 12,
-    left: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 8,
-    gap: 6,
-  },
-  roomLabelText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '600',
   },
 
   // ── Members ──
@@ -1965,6 +1480,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   modalTitle: {
+    flex: 1,
     fontSize: 18,
     fontWeight: '700',
     color: '#0f172a',
@@ -1993,13 +1509,8 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     marginBottom: 16,
   },
-  typeSelector: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 16,
-  },
   typeBtn: {
-    flex: 1,
+    alignSelf: 'stretch',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -2014,6 +1525,7 @@ const styles = StyleSheet.create({
     borderColor: '#059669',
   },
   typeBtnText: {
+    flexShrink: 1,
     fontSize: 14,
     fontWeight: '600',
     color: '#64748b',
@@ -2105,9 +1617,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#94a3b8',
     marginBottom: 2,
-  },
-  trackingLabelActive: {
-    color: '#059669',
   },
 
   // ── Events ──

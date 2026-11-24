@@ -1,0 +1,4 @@
+{
+  "bucket": "identity-references",
+  "signedUrlTtlSeconds": 600
+}

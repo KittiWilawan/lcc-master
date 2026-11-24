@@ -1,0 +1,11 @@
+{
+  "bodyFontSize": 16,
+  "minimumFontSize": 14,
+  "seniorMinimumFontSize": 18,
+  "seniorFontIncrement": 2,
+  "lineHeightRatio": 1.5,
+  "touchTargetSize": 48,
+  "seniorTouchTargetSize": 56,
+  "tabBarHeight": 76,
+  "seniorTabBarHeight": 88
+}

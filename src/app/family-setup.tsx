@@ -1,15 +1,15 @@
+import { CareText as Text } from '../components/CareText';
+import { AppAlert as Alert } from '../lib/appAlert';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
   Share,
   StyleSheet,
-  Text,
   TextInput,
   TouchableOpacity,
   View,
@@ -25,6 +25,7 @@ import {
 } from '../features/family/familySetup';
 import { getFriendlyErrorMessage } from '../lib/friendlyError';
 import { checkAndSaveUserFamily, supabase } from '../lib/supabase';
+import { SetupReturnButton } from '../components/SetupReturnButton';
 
 type SetupMode = 'create' | 'join';
 
@@ -37,6 +38,7 @@ const DEFAULT_FAMILY_NAME = 'ครอบครัวของฉัน';
 
 export default function FamilySetupScreen() {
   const router = useRouter();
+  const { setup } = useLocalSearchParams<{ setup?: string }>();
   const insets = useSafeAreaInsets();
   const { colors, seniorMode } = useTheme();
   const [selectedMode, setSelectedMode] = useState<SetupMode>('create');
@@ -61,14 +63,14 @@ export default function FamilySetupScreen() {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session?.user?.id) return;
         const family = await checkAndSaveUserFamily(session.user.id);
-        if (family?.familyId) router.replace('/(tabs)/home');
+        if (family?.familyId) router.replace(setup === 'true' ? '/setup-guide' : '/(tabs)/home');
       } catch (error) {
         console.log('Error checking existing family in setup:', error);
       }
     }
 
     void checkExistingFamily();
-  }, [router]);
+  }, [router, setup]);
 
   const selectMode = (mode: SetupMode) => {
     setSelectedMode(mode);
@@ -77,7 +79,7 @@ export default function FamilySetupScreen() {
 
   const handleSubmit = async () => {
     if (createdFamily) {
-      router.replace('/(tabs)/home');
+      router.replace(setup === 'true' ? '/setup-guide' : '/(tabs)/home');
       return;
     }
 
@@ -112,7 +114,7 @@ export default function FamilySetupScreen() {
         return;
       }
 
-      router.replace('/(tabs)/home');
+      router.replace(setup === 'true' ? '/setup-guide' : '/(tabs)/home');
     } catch (error: unknown) {
       Alert.alert(
         'ดำเนินการไม่สำเร็จ',
@@ -135,11 +137,12 @@ export default function FamilySetupScreen() {
     return (
       <View style={[styles.container, dynamicStyles.page, { paddingTop: Math.max(insets.top, 16) }]}>
         <ScrollView contentContainerStyle={styles.successContainer}>
+          {setup === 'true' && <SetupReturnButton />}
           <View style={styles.successIcon} accessibilityElementsHidden>
             <MaterialCommunityIcons name="check-bold" size={46} color="#ffffff" />
           </View>
           <Text style={[styles.successTitle, dynamicStyles.primaryText, { fontSize: 27 + textScale }]}>สร้างครอบครัวสำเร็จแล้ว</Text>
-          <Text style={[styles.successSubtitle, dynamicStyles.secondaryText, { fontSize: 16 + textScale }]}>คุณพร้อมเริ่มดูแลคนที่คุณรักแล้ว</Text>
+          <Text style={[styles.successSubtitle, dynamicStyles.secondaryText, { fontSize: 16 + textScale }]}>ขั้นตอนต่อไปคือเลือกคน เชื่อมกล้อง และทดสอบการแจ้งเตือน</Text>
 
           <View style={[styles.successCard, dynamicStyles.card]}>
             <Text style={[styles.familyName, dynamicStyles.primaryText, { fontSize: 20 + textScale }]}>{createdFamily.name}</Text>
@@ -173,8 +176,9 @@ export default function FamilySetupScreen() {
 
   return (
     <View style={[styles.container, dynamicStyles.page, { paddingTop: Math.max(insets.top, 16) }]}>
-      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
+          {setup === 'true' && <SetupReturnButton />}
           <View style={styles.header}>
             <View style={styles.headerIcon} accessibilityElementsHidden>
               <MaterialCommunityIcons name="home-heart" size={30} color="#047857" />

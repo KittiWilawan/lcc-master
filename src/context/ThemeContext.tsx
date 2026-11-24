@@ -22,20 +22,31 @@ export function getColors(isDark: boolean) {
     // Text
     textPrimary: isDark ? '#f1f5f9' : '#0f172a',
     textSecondary: isDark ? '#94a3b8' : '#64748b',
-    textMuted: isDark ? '#64748b' : '#94a3b8',
+    textMuted: isDark ? '#94a3b8' : '#64748b',
 
     // Accent
-    accent: '#059669',
+    accent: '#047857',
     accentBg: isDark ? '#064e3b' : '#ecfdf5',
-    accentText: isDark ? '#34d399' : '#059669',
+    accentText: isDark ? '#34d399' : '#047857',
 
     // Danger
     danger: '#dc2626',
     dangerBg: isDark ? '#450a0a' : '#fef2f2',
+    dangerText: isDark ? '#fca5a5' : '#dc2626',
 
     // Warning
     warning: '#f59e0b',
     warningBg: isDark ? '#451a03' : '#fefce8',
+    warningText: isDark ? '#fcd34d' : '#92400e',
+    warningBorder: isDark ? '#a16207' : '#fbbf24',
+    infoBg: isDark ? '#082f49' : '#e0f2fe',
+    infoText: isDark ? '#7dd3fc' : '#0369a1',
+    infoBorder: isDark ? '#075985' : '#bae6fd',
+    purpleBg: isDark ? '#2e1065' : '#f3e8ff',
+    purpleText: isDark ? '#c4b5fd' : '#7e22ce',
+    onAccent: '#ffffff',
+    mediaBackground: '#0f172a',
+    shadow: '#000000',
 
     // Tab bar
     tabBarBg: isDark ? '#0f172a' : '#ffffff',
@@ -47,6 +58,8 @@ export function getColors(isDark: boolean) {
     chipBg: isDark ? '#1e293b' : '#f0fdf4',
   };
 }
+
+export type ThemeColors = ReturnType<typeof getColors>;
 
 const ThemeContext = createContext<ThemeContextType>({
   isDarkMode: false,

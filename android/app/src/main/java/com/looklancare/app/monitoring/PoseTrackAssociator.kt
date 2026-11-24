@@ -74,12 +74,12 @@ class PoseTrackAssociator(private val policy: TrackAssociationPolicy) {
 
   /** Preview the same one-to-one assignment without advancing observations or evidence. */
   fun missingBounds(observations: List<PoseBounds>, timestamp: Long,
-                    appearances: List<FloatArray?> = List(observations.size) { null }): List<PoseBounds> {
+                    appearances: List<FloatArray?> = List(observations.size) { null }, eligibleIds: Set<Int>? = null): List<PoseBounds> {
     require(timestamp > lastTimestamp)
     validateAppearances(observations, appearances)
     tracks.removeAll { timestamp - it.timestamp > policy.maxGapMs }
     val used = assignments(observations, appearances, timestamp).filter { it >= 0 }.toSet()
-    return tracks.indices.filter { it !in used }.map { index ->
+    return tracks.indices.filter { it !in used && (eligibleIds == null || tracks[it].id in eligibleIds) }.map { index ->
       val track = tracks[index]
       val seconds = (timestamp - track.timestamp) / 1000f
       val dx = track.velocityX * seconds
@@ -141,6 +141,9 @@ data class FallEvidencePolicy(val threshold: Double, val confirmations: Int, val
 /** A missed pose cannot trigger an alert; only a fresh scored observation can. */
 class FallEvidence(private val policy: FallEvidencePolicy) {
   var confirmations = 0; private set
+  private var collapseSamples = 0
+  private var lastCollapse: Long? = null
+  val collapseConfirmed get() = collapseSamples >= policy.confirmations
   private var lastHigh = 0L
   private var normalSamples = 0
   private var alerted = false
@@ -148,17 +151,34 @@ class FallEvidence(private val policy: FallEvidencePolicy) {
   fun expire(timestamp: Long) {
     if (timestamp - lastHigh > policy.maxGapMs) confirmations = 0
   }
-  fun observe(probability: Double?, timestamp: Long): Boolean {
+  fun observe(probability: Double?, timestamp: Long, allowAlert: Boolean = true): Boolean {
+    return observe(probability, timestamp, allowAlert, false)
+  }
+
+  fun observe(probability: Double?, timestamp: Long, allowAlert: Boolean, clearCollapse: Boolean): Boolean {
+    return observe(probability, timestamp, allowAlert, clearCollapse, false)
+  }
+  fun observe(probability: Double?, timestamp: Long, allowAlert: Boolean, clearCollapse: Boolean, learnedConfirmed: Boolean): Boolean {
     expire(timestamp)
+    val previous = lastCollapse
+    val followsPrevious = previous != null && timestamp > previous && timestamp - previous <= policy.maxGapMs
+    if (probability != null && allowAlert && clearCollapse) {
+      collapseSamples = if (followsPrevious) (collapseSamples + 1).coerceAtMost(policy.confirmations) else 1
+      lastCollapse = timestamp
+    } else {
+      collapseSamples = 0
+      lastCollapse = null
+    }
     if (probability == null) return false
     require(probability.isFinite() && probability in 0.0..1.0)
     if (probability >= policy.threshold) {
       confirmations++; lastHigh = timestamp; normalSamples = 0
     } else {
       confirmations = 0; normalSamples++
-      if (normalSamples >= policy.rearmSamples) alerted = false
+      if (!collapseConfirmed && !learnedConfirmed && normalSamples >= policy.rearmSamples) alerted = false
     }
-    if (confirmations < policy.confirmations || alerted || (lastAlert != 0L && timestamp - lastAlert < policy.cooldownMs)) return false
+    val confirmed = learnedConfirmed || (allowAlert && (confirmations >= policy.confirmations || collapseConfirmed))
+    if (!confirmed || alerted || (lastAlert != 0L && timestamp - lastAlert < policy.cooldownMs)) return false
     lastAlert = timestamp; alerted = true
     return true
   }

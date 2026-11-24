@@ -7,8 +7,12 @@ data class PoseObservation(val points: List<PosePoint>, val bounds: PoseBounds) 
 
   companion object {
     fun create(points: List<PosePoint>, landmarkCount: Int, visibility: Float): PoseObservation? {
-      if (points.size != landmarkCount || points.any { !it.x.isFinite() || !it.y.isFinite() || !it.z.isFinite() || !it.visibility.isFinite() }) return null
-      val selected = points.filter { it.visibility >= visibility }.ifEmpty { points }
+      require(landmarkCount > 0 && visibility.isFinite() && visibility in 0f..1f)
+      if (points.size != landmarkCount || points.any { !it.x.isFinite() || !it.y.isFinite() || !it.z.isFinite() ||
+          !it.visibility.isFinite() || it.visibility !in 0f..1f }) return null
+      val selected = points.filter { it.visibility >= visibility }
+      // A detector proposal with no visible landmarks is not an observed person.
+      if (selected.isEmpty()) return null
       val bounds = PoseBounds(selected.minOf { it.x }.coerceIn(0f, 1f), selected.minOf { it.y }.coerceIn(0f, 1f),
         selected.maxOf { it.x }.coerceIn(0f, 1f), selected.maxOf { it.y }.coerceIn(0f, 1f))
       return if (bounds.area > 0f) PoseObservation(points, bounds) else null
@@ -46,6 +50,22 @@ class PoseObservationReducer(private val policy: PoseDuplicatePolicy) {
 
 data class PoseCrop(val left: Int, val top: Int, val width: Int, val height: Int) {
   init { require(left >= 0 && top >= 0 && width > 0 && height > 0) }
+
+  fun centered(fraction: Double): PoseCrop {
+    require(fraction > 0 && fraction <= 1)
+    if (fraction == 1.0) return this
+    val w = kotlin.math.round(width * fraction).toInt().coerceAtLeast(1)
+    val h = kotlin.math.round(height * fraction).toInt().coerceAtLeast(1)
+    return PoseCrop(left + (width - w) / 2, top + (height - h) / 2, w, h)
+  }
+
+  /** At the image sides a rotated wide view spends much of its area away from the motion. */
+  fun searchArea(fraction: Double, nearSideOnly: Boolean, frameWidth: Int): PoseCrop {
+    require(frameWidth >= left + width)
+    val tight = centered(fraction)
+    val sideGap = minOf(left, frameWidth - left - width)
+    return if (nearSideOnly && sideGap > (width - tight.width) / 2) this else tight
+  }
 
   /** Restore image coordinates and the MediaPipe z scale (expressed in input-image widths). */
   fun restore(points: List<PosePoint>, frameWidth: Int, frameHeight: Int, rotation: Int): List<PosePoint> {

@@ -2,7 +2,7 @@ package com.looklancare.app.monitoring
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
+import com.looklancare.app.imaging.BitmapFrames
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
@@ -31,7 +31,10 @@ class CameraStreamSession(
   private val config: MonitoringConfig,
   private val onState: (String) -> Unit,
   private val onFrame: (Bitmap, Long) -> Unit,
+  private val onUnsupportedSource: ((String) -> Unit)?,
 ) : AutoCloseable {
+  constructor(context: Context, source: String, config: MonitoringConfig, onState: (String) -> Unit,
+    onFrame: (Bitmap, Long) -> Unit) : this(context, source, config, onState, onFrame, null)
   private val thread = HandlerThread("CameraDecoder").apply { start() }
   private val handler = Handler(thread.looper)
   private val network = Executors.newSingleThreadExecutor()
@@ -79,26 +82,21 @@ class CameraStreamSession(
         probe.useCaches = false
         check(probe.responseCode in 200..299) { "Camera returned an error" }
         val mime = probe.contentType?.substringBefore(';')?.lowercase().orEmpty()
+        if (onUnsupportedSource != null && mime in setOf("multipart/x-mixed-replace", "video/x-motion-jpeg", "video/mjpeg", "text/html")) {
+          probe.disconnect(); connection = null
+          val message = if (mime == "text/html") "ลิงก์นี้เปิดหน้าเว็บ ให้คัดลอกลิงก์ภาพสด HLS จากการตั้งค่ากล้อง"
+            else "กล้องส่งภาพแบบ MJPEG ให้แปลงเป็น HLS ในโปรแกรมส่งภาพ แล้ววางลิงก์ใหม่"
+          handler.post { if (!closed.get()) onUnsupportedSource.invoke(message) }
+          return@execute
+        }
         if (mime.startsWith("image/")) {
           val bytes = probe.inputStream.use { readBounded(it, config.int("maxSnapshotBytes") + 1) }
           check(bytes.size <= config.int("maxSnapshotBytes")) { "Camera image exceeds limit" }
-          val dimensions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-          BitmapFactory.decodeByteArray(bytes, 0, bytes.size, dimensions)
-          check(dimensions.outWidth > 0 && dimensions.outHeight > 0) { "Camera returned an invalid image" }
-          val options = BitmapFactory.Options().apply {
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-            inSampleSize = 1
-            while (maxOf(dimensions.outWidth, dimensions.outHeight) / inSampleSize > config.int("maxFrameDimension")) inSampleSize *= 2
-          }
-          val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: error("Camera returned an invalid image")
+          val bitmap = BitmapFrames.decode(bytes, config.int("maxFrameDimension"))
           probe.disconnect(); connection = null
           handler.post {
             if (!closed.get()) {
-              val max = config.int("maxFrameDimension")
-              val scale = minOf(1f, max.toFloat() / maxOf(bitmap.width, bitmap.height))
-              val scaled = if (scale < 1f) Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt().coerceAtLeast(1),
-                (bitmap.height * scale).toInt().coerceAtLeast(1), true).also { bitmap.recycle() } else bitmap
-              acceptFrame(scaled, SystemClock.elapsedRealtime())
+              acceptFrame(bitmap, SystemClock.elapsedRealtime())
               handler.postDelayed({ connect() }, config.long("frameIntervalMs"))
             } else bitmap.recycle()
           }

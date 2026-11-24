@@ -1,18 +1,22 @@
-import { useState, useEffect } from 'react';
+import { CareText as Text } from '../../components/CareText';
+import { AppAlert as Alert } from '../../lib/appAlert';
+import { useTheme, type ThemeColors } from '../../context/ThemeContext';
+import { useState, useEffect, useRef } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
   Modal,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { sendLocalTestNotification } from '../../lib/pushNotifications';
+import forms from '../../config/forms.json';
 import { supabase } from '../../lib/supabase';
+import { EventDeliveryStatus } from '../../components/EventDeliveryStatus';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getFallEvents, FallEvidenceRecord } from '../../lib/fallEvidence';
 import { callPhoneNumber, getEmergencyPhoneNumber } from '../../lib/phone';
@@ -20,7 +24,7 @@ import { getFriendlyErrorMessage } from '../../lib/friendlyError';
 
 interface AlertItem {
   id: string;
-  type: 'critical' | 'simulated' | 'log';
+  type: 'critical' | 'simulated' | 'sos';
   title: string;
   subtitle: string;
   person: string;
@@ -36,6 +40,20 @@ interface AlertItem {
 
 export default function AlertsScreen() {
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
+  const [filter, setFilter] = useState<AlertItem['type'] | 'all'>('all');
+  const [testingNotification, setTestingNotification] = useState(false);
+  const testing = useRef(false);
+  const testNotification = async () => {
+    if (testing.current) return;
+    testing.current = true; setTestingNotification(true);
+    try {
+      if (await sendLocalTestNotification()) Alert.success('ตั้งเวลาทดสอบแล้ว', `ดูแถบแจ้งเตือนภายใน ${forms.notificationTestDelaySeconds} วินาที การทดสอบนี้ไม่ส่งเหตุฉุกเฉินให้ครอบครัว`);
+      else Alert.error('ยังทดสอบไม่ได้', 'กรุณาอนุญาตการแจ้งเตือนในการตั้งค่ามือถือ และใช้แอปบนมือถือ');
+    } catch (error) { Alert.error('ทดสอบไม่สำเร็จ', getFriendlyErrorMessage(error)); }
+    finally { testing.current = false; setTestingNotification(false); }
+  };
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [loadingAlerts, setLoadingAlerts] = useState(true);
   const [caregiver, setCaregiver] = useState<any>(null);
@@ -73,7 +91,7 @@ export default function AlertsScreen() {
 
           return {
             id: item.id || idx.toString(),
-            type: isActual ? 'critical' : item.event_type === 'simulated' ? 'simulated' : 'log',
+            type: isActual ? 'critical' : item.event_type === 'simulated' ? 'simulated' : 'sos',
             title: isActual ? 'AI สงสัยว่าอาจเกิดการล้ม' : item.event_type === 'sos' ? 'สัญญาณ SOS' : 'เหตุการณ์ทดสอบ',
             subtitle: item.details || `ตรวจพบการหกล้มที่ ${item.camera_name || 'กล้องวงจรปิด'}`,
             person: item.member_name || 'ยังไม่ยืนยันตัวบุคคล',
@@ -144,13 +162,13 @@ export default function AlertsScreen() {
       }
       setAlerts((prev) => prev.map((a) => a.id === alertId ? { ...a, status: 'responded' } : a));
 
-      Alert.alert(
-        'รับทราบเหตุการณ์แล้ว 🟢',
+      Alert.success(
+        'รับทราบเหตุการณ์แล้ว',
         'ระบบได้ทำการซิงค์บอกทุกคนในบ้านเรียบร้อยแล้วว่าท่านรับทราบและกำลังไปช่วยเหลือ'
       );
     } catch (e: any) {
       console.log('Error acknowledging alert:', e);
-      Alert.alert('บันทึกการรับทราบไม่สำเร็จ', 'กรุณาลองใหม่');
+      Alert.error('บันทึกการรับทราบไม่สำเร็จ', 'กรุณาลองใหม่');
     }
   };
 
@@ -164,15 +182,15 @@ export default function AlertsScreen() {
         return;
       }
       setAlerts((prev) => prev.map((a) => a.id === alertId ? { ...a, status: 'cancelled' } : a));
-      Alert.alert('ยกเลิกแล้ว', 'บันทึกเหตุการณ์ไว้เป็นการแจ้งเตือนผิดพลาด');
+      Alert.success('ยกเลิกแล้ว', 'บันทึกเหตุการณ์ไว้เป็นการแจ้งเตือนผิดพลาด');
     } catch (e) {
       console.log('Error cancelling pending fall:', e);
-      Alert.alert('ยกเลิกไม่สำเร็จ', 'กรุณาตรวจอินเทอร์เน็ตแล้วลองใหม่');
+      Alert.error('ยกเลิกไม่สำเร็จ', 'กรุณาตรวจอินเทอร์เน็ตแล้วลองใหม่');
     }
   };
 
   const confirmCancelPendingAlert = (alertId: string) => {
-    Alert.alert(
+    Alert.confirm(
       'ยืนยันว่าเป็นเหตุผิดพลาด',
       'ระบบจะหยุดการแจ้งเตือนซ้ำสำหรับเหตุนี้ และเก็บประวัติไว้ตรวจสอบ',
       [
@@ -185,44 +203,44 @@ export default function AlertsScreen() {
   const getStatusBadge = (status: AlertItem['status']) => {
     switch (status) {
       case 'pending':
-        return { label: 'รอตรวจสอบ', bg: '#fef3c7', color: '#92400e' };
+        return { label: 'รอตรวจสอบ', bg: colors.warningBg, color: colors.warningText };
       case 'responded':
-        return { label: 'RESPONDED', bg: '#dcfce7', color: '#16a34a' };
+        return { label: 'รับทราบแล้ว', bg: colors.accentBg, color: colors.accentText };
       case 'notified':
-        return { label: 'NOTIFIED', bg: '#fff7ed', color: '#ea580c' };
+        return { label: 'แจ้งแล้ว', bg: colors.warningBg, color: colors.warningText };
       case 'cancelled':
-        return { label: 'CANCELLED', bg: '#f1f5f9', color: '#64748b' };
+        return { label: 'ยกเลิกแล้ว', bg: colors.inputBg, color: colors.textSecondary };
     }
   };
 
   const getAlertIcon = (type: AlertItem['type']) => {
     switch (type) {
       case 'critical':
-        return { name: 'alert' as const, bg: '#fef3c7', color: '#d97706' };
+        return { name: 'alert' as const, bg: colors.warningBg, color: colors.warningText };
       case 'simulated':
-        return { name: 'lightning-bolt' as const, bg: '#f1f5f9', color: '#64748b' };
-      case 'log':
-        return { name: 'clipboard-text-outline' as const, bg: '#f1f5f9', color: '#64748b' };
+        return { name: 'lightning-bolt' as const, bg: colors.inputBg, color: colors.textSecondary };
+      case 'sos':
+        return { name: 'clipboard-text-outline' as const, bg: colors.inputBg, color: colors.textSecondary };
     }
   };
 
   const getAlertLabel = (type: AlertItem['type']) => {
     switch (type) {
       case 'critical':
-        return 'CRITICAL ALERT';
+        return 'AI สงสัยล้ม';
       case 'simulated':
-        return 'SIMULATED FALL';
-      case 'log':
-        return 'ALERT LOG';
+        return 'เหตุจำลอง';
+      case 'sos':
+        return 'SOS ขอความช่วยเหลือ';
     }
   };
 
   const handleCallEmergency = async () => {
     try {
       const opened = await callPhoneNumber(getEmergencyPhoneNumber());
-      if (!opened) Alert.alert('โทรออกไม่ได้', 'อุปกรณ์นี้ไม่รองรับการโทร กรุณาใช้โทรศัพท์โทรหาเบอร์ฉุกเฉิน');
+      if (!opened) Alert.error('โทรออกไม่ได้', 'อุปกรณ์นี้ไม่รองรับการโทร กรุณาใช้โทรศัพท์โทรหาเบอร์ฉุกเฉิน');
     } catch (error) {
-      Alert.alert('โทรออกไม่ได้', getFriendlyErrorMessage(error));
+      Alert.error('โทรออกไม่ได้', getFriendlyErrorMessage(error));
     }
   };
 
@@ -233,11 +251,11 @@ export default function AlertsScreen() {
         <View style={styles.sosHeaderContent}>
           <View style={styles.sosIconRow}>
             <View style={styles.sosIconCircle}>
-              <MaterialCommunityIcons name="plus-thick" size={20} color="#ffffff" />
+              <MaterialCommunityIcons name="plus-thick" size={20} color={colors.onAccent} />
             </View>
             <View>
-              <Text style={styles.sosTitle}>SOS ALERT</Text>
-              <Text style={styles.sosSubtitle}>ส่งความช่วยเหลือ</Text>
+              <Text style={styles.sosTitle}>การแจ้งเตือน</Text>
+              <Text style={styles.sosSubtitle}>ตรวจเหตุและช่วยเหลือ</Text>
             </View>
           </View>
           <TouchableOpacity onPress={() => void loadAlertsAndMembers()}>
@@ -249,13 +267,28 @@ export default function AlertsScreen() {
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Page Title */}
         <View style={styles.pageTitle}>
-          <Text style={styles.pageTitleText}>Emergency Log (บันทึก{'\n'}เหตุการณ์)</Text>
+          <Text style={styles.pageTitleText}>บันทึกเหตุการณ์</Text>
         </View>
 
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="ทดสอบการแจ้งเตือนบนเครื่องนี้" disabled={testingNotification}
+          onPress={() => void testNotification()} style={{ backgroundColor: colors.accent, padding: 16, minHeight: 52, borderRadius: 16, marginBottom: 16, alignItems: 'center' }}>
+          {testingNotification ? <ActivityIndicator color={colors.onAccent} /> : <Text style={{ color: colors.onAccent, fontSize: 16, fontWeight: '700' }}>ทดสอบการแจ้งเตือน</Text>}
+        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+          {([{ key: 'all', label: 'ทั้งหมด' }, { key: 'critical', label: 'AI สงสัยล้ม' }, { key: 'sos', label: 'SOS' }, { key: 'simulated', label: 'จำลอง' }] as const).map(item =>
+            <TouchableOpacity key={item.key} accessibilityRole="button" accessibilityState={{ selected: filter === item.key }} onPress={() => setFilter(item.key)}
+              style={{ minHeight: 48, padding: 12, borderRadius: 14, backgroundColor: filter === item.key ? colors.accentBg : colors.card, borderWidth: 1, borderColor: filter === item.key ? colors.accentText : colors.cardBorder }}>
+              <Text style={{ color: filter === item.key ? colors.accentText : colors.textPrimary, fontWeight: '700' }}>{item.label}</Text>
+            </TouchableOpacity>)}
+        </View>
+        {!loadingAlerts && !alerts.some(item => filter === 'all' || item.type === filter) && <View style={{ padding: 28, backgroundColor: colors.card, borderRadius: 18 }}>
+          <Text style={{ color: colors.textPrimary, fontSize: 18, textAlign: 'center' }}>ยังไม่มีเหตุการณ์ในหมวดนี้</Text>
+          <Text style={{ color: colors.textSecondary, textAlign: 'center', marginTop: 8 }}>เหตุที่บันทึกจะแสดงที่นี่</Text>
+        </View>}
         {loadingAlerts ? (
-          <ActivityIndicator size="large" color="#059669" style={{ marginVertical: 40 }} />
+          <ActivityIndicator size="large" color={colors.accentText} style={{ marginVertical: 40 }} />
         ) : (
-          alerts.map((alert) => {
+          alerts.filter(item => filter === 'all' || item.type === filter).map((alert) => {
             const statusBadge = getStatusBadge(alert.status);
             const alertIcon = getAlertIcon(alert.type);
             const alertLabel = getAlertLabel(alert.type);
@@ -268,7 +301,7 @@ export default function AlertsScreen() {
                     <View style={[styles.alertIconCircle, { backgroundColor: alertIcon.bg }]}>
                       <MaterialCommunityIcons name={alertIcon.name} size={16} color={alertIcon.color} />
                     </View>
-                    <Text style={[styles.alertLabel, alert.type === 'critical' && { color: '#d97706' }]}>
+                    <Text style={[styles.alertLabel, alert.type === 'critical' && { color: colors.warningText }]}>
                       {alertLabel}
                     </Text>
                   </View>
@@ -297,12 +330,12 @@ export default function AlertsScreen() {
 
                 {/* Person Name */}
                 <View style={styles.personRow}>
-                  <MaterialCommunityIcons name="account-circle-outline" size={16} color="#475569" />
+                  <MaterialCommunityIcons name="account-circle-outline" size={16} color={colors.textSecondary} />
                   <Text style={styles.personName}>{alert.person}</Text>
                 </View>
 
                 {/* Action Buttons */}
-                {alert.type === 'critical' ? (
+                {alert.type === 'critical' || alert.type === 'sos' ? (
                   <View style={styles.alertActionsColumn}>
                     <View style={styles.alertActions}>
                       {alert.status === 'pending' || alert.status === 'notified' ? (
@@ -310,34 +343,35 @@ export default function AlertsScreen() {
                           style={[styles.callBtn, { backgroundColor: '#059669', flex: 1.3 }]}
                           onPress={() => void handleAcknowledgeAlert(alert.id)}
                         >
-                          <MaterialCommunityIcons name="check-circle-outline" size={16} color="#ffffff" />
+                          <MaterialCommunityIcons name="check-circle-outline" size={16} color={colors.onAccent} />
                           <Text style={styles.callBtnText}>รับทราบ / กำลังช่วยเหลือ</Text>
                         </TouchableOpacity>
                       ) : (
-                        <View style={[styles.callBtn, { backgroundColor: '#dcfce7', borderWidth: 1, borderColor: '#86efac', flex: 1.3 }]}>
-                          <MaterialCommunityIcons name="check-circle" size={16} color="#16a34a" />
-                          <Text style={[styles.callBtnText, { color: '#16a34a', fontWeight: '800' }]}>รับทราบแล้ว</Text>
+                        <View style={[styles.callBtn, { backgroundColor: colors.accentBg, borderWidth: 1, borderColor: colors.accentText, flex: 1.3 }]}>
+                          <MaterialCommunityIcons name="check-circle" size={16} color={colors.accentText} />
+                          <Text style={[styles.callBtnText, { color: colors.accentText, fontWeight: '800' }]}>{alert.status === 'cancelled' ? 'ยกเลิกแล้ว' : 'รับทราบแล้ว'}</Text>
                         </View>
                       )}
                       <TouchableOpacity style={styles.callBtn} onPress={() => void handleCallEmergency()}>
-                        <MaterialCommunityIcons name="phone" size={16} color="#ffffff" />
+                        <MaterialCommunityIcons name="phone" size={16} color={colors.onAccent} />
                         <Text style={styles.callBtnText}>โทรฉุกเฉิน</Text>
                       </TouchableOpacity>
                     </View>
-                    {alert.status === 'pending' && (
+                    {alert.type === 'critical' && alert.status === 'pending' && (
                       <TouchableOpacity style={styles.evidenceBtn} onPress={() => confirmCancelPendingAlert(alert.id)}>
-                        <MaterialCommunityIcons name="close-circle-outline" size={16} color="#b45309" />
-                        <Text style={[styles.evidenceBtnText, { color: '#b45309' }]}>ฉันสบายดี / ยกเลิกเหตุผิดพลาด</Text>
+                        <MaterialCommunityIcons name="close-circle-outline" size={16} color={colors.warningText} />
+                        <Text style={[styles.evidenceBtnText, { color: colors.warningText }]}>ฉันสบายดี / ยกเลิกเหตุผิดพลาด</Text>
                       </TouchableOpacity>
                     )}
+                    {alert.type === 'critical' ? <EventDeliveryStatus eventId={alert.id} /> : null}
                     <TouchableOpacity style={styles.evidenceBtn} onPress={() => handleViewEvidence(alert)}>
-                      <MaterialCommunityIcons name="camera-burst" size={16} color="#0284c7" />
+                      <MaterialCommunityIcons name="camera-burst" size={16} color={colors.infoText} />
                       <Text style={styles.evidenceBtnText}>ดูรูปถ่าย / หลักฐานการล้มสด</Text>
                     </TouchableOpacity>
                   </View>
                 ) : (
                   <TouchableOpacity style={styles.evidenceBtnSmall} onPress={() => handleViewEvidence(alert)}>
-                    <MaterialCommunityIcons name="image-search-outline" size={14} color="#64748b" />
+                    <MaterialCommunityIcons name="image-search-outline" size={14} color={colors.textSecondary} />
                     <Text style={styles.evidenceBtnSmallText}>ดูรูปถ่าย / หลักฐาน</Text>
                   </TouchableOpacity>
                 )}
@@ -348,8 +382,8 @@ export default function AlertsScreen() {
 
         {/* Family Lead / Caregiver */}
         <View style={styles.caregiverCard}>
-          <View style={[styles.infoCardIconCircle, { backgroundColor: '#f1f5f9' }]}>
-            <MaterialCommunityIcons name="account-heart-outline" size={22} color="#059669" />
+          <View style={[styles.infoCardIconCircle, { backgroundColor: colors.inputBg }]}>
+            <MaterialCommunityIcons name="account-heart-outline" size={22} color={colors.accentText} />
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.infoCardLabel}>FAMILY CAREGIVER</Text>
@@ -368,11 +402,11 @@ export default function AlertsScreen() {
             <View style={styles.modalContent}>
               <View style={styles.modalHeader}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <MaterialCommunityIcons name="camera" size={20} color="#0284c7" />
+                  <MaterialCommunityIcons name="camera" size={20} color={colors.infoText} />
                   <Text style={styles.modalTitle}>หลักฐานภาพถ่ายขณะเกิดเหตุ</Text>
                 </View>
                 <TouchableOpacity onPress={() => setSelectedEvidence(null)}>
-                  <MaterialCommunityIcons name="close" size={24} color="#64748b" />
+                  <MaterialCommunityIcons name="close" size={24} color={colors.textSecondary} />
                 </TouchableOpacity>
               </View>
 
@@ -405,7 +439,7 @@ export default function AlertsScreen() {
               {/* Modal Actions */}
               <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
                 <TouchableOpacity style={[styles.callBtn, { flex: 1 }]} onPress={() => void handleCallEmergency()}>
-                  <MaterialCommunityIcons name="phone" size={16} color="#ffffff" />
+                  <MaterialCommunityIcons name="phone" size={16} color={colors.onAccent} />
                   <Text style={styles.callBtnText}>โทรฉุกเฉินด่วน</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -423,10 +457,10 @@ export default function AlertsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#f8fafc',
+    backgroundColor: colors.background,
   },
   sosHeader: {
     backgroundColor: '#dc2626',
@@ -454,7 +488,7 @@ const styles = StyleSheet.create({
   sosTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#ffffff',
+    color: colors.onAccent,
     letterSpacing: 1,
   },
   sosSubtitle: {
@@ -463,7 +497,7 @@ const styles = StyleSheet.create({
   },
   sosEditLink: {
     fontSize: 13,
-    color: '#ffffff',
+    color: colors.onAccent,
     textDecorationLine: 'underline',
   },
   scrollContent: {
@@ -476,26 +510,26 @@ const styles = StyleSheet.create({
   pageTitleText: {
     fontSize: 22,
     fontWeight: 'bold',
-    color: '#0f172a',
+    color: colors.textPrimary,
     lineHeight: 30,
   },
   alertCard: {
-    backgroundColor: '#ffffff',
+    backgroundColor: colors.card,
     borderRadius: 16,
     padding: 16,
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-    shadowColor: '#000',
+    borderColor: colors.cardBorder,
+    shadowColor: colors.shadow,
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.04,
     shadowRadius: 4,
     elevation: 1,
   },
   alertCardCritical: {
-    borderColor: '#fbbf24',
+    borderColor: colors.warningBorder,
     borderWidth: 2,
-    backgroundColor: '#fffdf5',
+    backgroundColor: colors.warningBg,
   },
   alertHeaderRow: {
     flexDirection: 'row',
@@ -518,12 +552,12 @@ const styles = StyleSheet.create({
   alertLabel: {
     fontSize: 11,
     fontWeight: 'bold',
-    color: '#64748b',
+    color: colors.textSecondary,
     letterSpacing: 0.5,
   },
   alertTime: {
     fontSize: 11,
-    color: '#94a3b8',
+    color: colors.textMuted,
   },
   alertTitleRow: {
     flexDirection: 'row',
@@ -534,7 +568,7 @@ const styles = StyleSheet.create({
   alertTitle: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#0f172a',
+    color: colors.textPrimary,
     flex: 1,
   },
   statusBadge: {
@@ -550,7 +584,7 @@ const styles = StyleSheet.create({
   },
   alertSubtitle: {
     fontSize: 12,
-    color: '#64748b',
+    color: colors.textSecondary,
     marginBottom: 4,
   },
   personRow: {
@@ -562,7 +596,7 @@ const styles = StyleSheet.create({
   personName: {
     fontSize: 13,
     fontWeight: 'bold',
-    color: '#475569',
+    color: colors.textSecondary,
     marginLeft: 6,
   },
   alertActionsColumn: {
@@ -584,7 +618,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   callBtnText: {
-    color: '#ffffff',
+    color: colors.onAccent,
     fontSize: 13,
     fontWeight: 'bold',
   },
@@ -593,15 +627,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#ffffff',
+    backgroundColor: colors.card,
     borderRadius: 10,
     paddingVertical: 12,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: colors.cardBorder,
     gap: 6,
   },
   contactBtnText: {
-    color: '#0f172a',
+    color: colors.textPrimary,
     fontSize: 13,
     fontWeight: 'bold',
   },
@@ -609,15 +643,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#e0f2fe',
+    backgroundColor: colors.infoBg,
     borderRadius: 10,
     paddingVertical: 11,
     gap: 8,
     borderWidth: 1,
-    borderColor: '#bae6fd',
+    borderColor: colors.infoBorder,
   },
   evidenceBtnText: {
-    color: '#0284c7',
+    color: colors.infoText,
     fontSize: 13,
     fontWeight: 'bold',
   },
@@ -628,18 +662,18 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   evidenceBtnSmallText: {
-    color: '#64748b',
+    color: colors.textSecondary,
     fontSize: 12,
     textDecorationLine: 'underline',
   },
   caregiverCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f8fafc',
+    backgroundColor: colors.background,
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: colors.cardBorder,
     gap: 14,
     marginBottom: 16,
   },
@@ -647,26 +681,26 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#d1fae5',
+    backgroundColor: colors.accentBg,
     justifyContent: 'center',
     alignItems: 'center',
   },
   infoCardLabel: {
     fontSize: 9,
     fontWeight: 'bold',
-    color: '#94a3b8',
+    color: colors.textMuted,
     letterSpacing: 1,
     marginBottom: 2,
   },
   infoCardTitle: {
     fontSize: 15,
     fontWeight: 'bold',
-    color: '#0f172a',
+    color: colors.textPrimary,
     lineHeight: 20,
   },
   caregiverRole: {
     fontSize: 11,
-    color: '#64748b',
+    color: colors.textSecondary,
     marginTop: 2,
   },
   modalOverlay: {
@@ -679,7 +713,7 @@ const styles = StyleSheet.create({
   modalContent: {
     width: '100%',
     maxWidth: 420,
-    backgroundColor: '#ffffff',
+    backgroundColor: colors.card,
     borderRadius: 20,
     padding: 16,
   },
@@ -692,14 +726,14 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 16,
     fontWeight: '800',
-    color: '#0f172a',
+    color: colors.textPrimary,
   },
   imageContainer: {
     width: '100%',
     height: 220,
     borderRadius: 12,
     overflow: 'hidden',
-    backgroundColor: '#0f172a',
+    backgroundColor: colors.mediaBackground,
     position: 'relative',
     marginBottom: 12,
   },
@@ -717,27 +751,27 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   imageOverlayBadgeText: {
-    color: '#ffffff',
+    color: colors.onAccent,
     fontSize: 9,
     fontWeight: '900',
   },
   detailsBox: {
-    backgroundColor: '#f8fafc',
+    backgroundColor: colors.background,
     padding: 12,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: colors.cardBorder,
     gap: 4,
   },
   detailTitle: {
     fontSize: 15,
     fontWeight: '800',
-    color: '#dc2626',
+    color: colors.dangerText,
     marginBottom: 4,
   },
   detailText: {
     fontSize: 12,
-    color: '#334155',
+    color: colors.textPrimary,
     fontWeight: '600',
   },
 });

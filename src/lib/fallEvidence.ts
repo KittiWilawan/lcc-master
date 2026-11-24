@@ -4,6 +4,7 @@ import { decode } from 'base64-arraybuffer';
 import { v4 as uuidv4 } from 'uuid';
 import runtime from '../../android/app/src/main/assets/monitoring/runtime.json';
 import { File } from 'expo-file-system';
+import { retainEvidenceRecords } from './evidenceRetention';
 
 export interface FallEvidenceRecord {
   id: string;
@@ -81,6 +82,7 @@ export async function recordFallEvent(params: {
   notificationSent?: boolean;
   deferCloudSync?: boolean;
   cloudImagePath?: string;
+  cloudSynced?: boolean;
 }): Promise<FallEvidenceRecord> {
   const familyId = params.familyId || (await AsyncStorage.getItem('familyId')) || undefined;
   const memberName = params.memberName || 'ยังไม่ยืนยันตัวบุคคล';
@@ -111,11 +113,12 @@ export async function recordFallEvent(params: {
   newRecord.savedLocally = await saveLocalRecord(newRecord);
 
   if (params.deferCloudSync) {
+    if (params.cloudSynced) newRecord.cloudSynced = true;
     if (params.cloudImagePath && familyId && params.eventId && params.cloudImagePath === `${familyId}/${params.eventId}.jpg`) {
       newRecord.image_url = params.cloudImagePath;
       newRecord.cloudSynced = true;
-      newRecord.savedLocally = await saveLocalRecord(newRecord);
     }
+    if (newRecord.cloudSynced) newRecord.savedLocally = await saveLocalRecord(newRecord);
     return newRecord;
   }
 
@@ -168,7 +171,7 @@ async function saveLocalRecord(record: FallEvidenceRecord): Promise<boolean> {
     const localData = await AsyncStorage.getItem(STORAGE_KEY_FALL_EVIDENCE);
     const list: FallEvidenceRecord[] = localData ? JSON.parse(localData) : [];
     const next = [record, ...list.filter((item) => item.id !== record.id)];
-    await AsyncStorage.setItem(STORAGE_KEY_FALL_EVIDENCE, JSON.stringify(next.slice(0, runtime.maxPendingEvents)));
+    await AsyncStorage.setItem(STORAGE_KEY_FALL_EVIDENCE, JSON.stringify(retainEvidenceRecords(next, runtime.maxPendingEvents)));
     return true;
   }).catch(() => false);
   localWrites = write;

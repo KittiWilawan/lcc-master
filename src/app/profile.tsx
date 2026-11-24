@@ -1,11 +1,13 @@
+import { CareText as Text } from '../components/CareText';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { v4 as uuid } from 'uuid';
+import { startPhoneTest, finishPhoneTest, lastPhoneTest, onPhoneTestChanged, type PhoneTest } from '../lib/selfTestReceipts';
 import {
   ActivityIndicator,
-  Alert,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -14,20 +16,23 @@ import {
   Share,
   StyleSheet,
   Switch,
-  Text,
   TextInput,
   TouchableOpacity,
   View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AppAlert as Alert } from '../lib/appAlert';
+import { normalizePin, PIN_LENGTH, validatePinPair } from '../lib/formValidation';
+import forms from '../config/forms.json';
 import { supabase } from '../lib/supabase';
-import { useTheme } from '../context/ThemeContext';
+import { useTheme, type ThemeColors } from '../context/ThemeContext';
+import { SetupReturnButton } from '../components/SetupReturnButton';
 import { signOutCurrentDevice } from '../lib/authSession';
 import {
   callPhoneNumber, isValidMobilePhone, MOBILE_PHONE_LENGTH, normalizeMobilePhoneInput,
 } from '../lib/phone';
 import { getFriendlyErrorMessage } from '../lib/friendlyError';
-import { registerForPushNotificationsAsync, sendLocalTestNotification, STORAGE_KEY_PUSH_REGISTRATION } from '../lib/pushNotifications';
+import { sendLocalTestNotification, sendRemoteSelfTestNotification } from '../lib/pushNotifications';
 
 interface EmergencyContact {
   id: string;
@@ -40,9 +45,10 @@ interface EmergencyContact {
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const { section, action } = useLocalSearchParams<{ section?: string; action?: string }>();
+  const { section, action, setup } = useLocalSearchParams<{ section?: string; action?: string; setup?: string }>();
   const insets = useSafeAreaInsets();
   const { isDarkMode, toggleDarkMode, seniorMode, toggleSeniorMode, colors } = useTheme();
+  const styles = createStyles(colors);
 
   // State 
   const [loading, setLoading] = useState(true);
@@ -52,6 +58,21 @@ export default function ProfileScreen() {
   const [fullName, setFullName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [testingAppNotification, setTestingAppNotification] = useState(false);
+  const remoteTestBusy = useRef(false);
+  const [receipt, setReceipt] = useState<{ owner: string; test: PhoneTest } | null>(null);
+  const currentTest = receipt?.owner === userId ? receipt?.test : null;
+  useEffect(() => {
+    if (!userId) return;
+    let listening = true;
+    let changed = false;
+    const unsubscribe = onPhoneTestChanged((owner, test) => {
+      if (owner === userId) { changed = true; setReceipt({ owner, test }); }
+    });
+    void lastPhoneTest(userId).then(test => {
+      if (listening && !changed && test) setReceipt({ owner: userId, test });
+    }).catch(() => undefined);
+    return () => { listening = false; unsubscribe(); };
+  }, [userId]);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [newAvatarImage, setNewAvatarImage] = useState<string | null>(null);
   const [familyCode, setFamilyCode] = useState('ไม่มีรหัส');
@@ -63,6 +84,10 @@ export default function ProfileScreen() {
   const [appLockEnabled, setAppLockEnabled] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
   const [newPin, setNewPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [savingPin, setSavingPin] = useState(false);
+  const [pinError, setPinError] = useState<string | null>(null);
+  const closePinModal = () => { if (savingPin) return; setShowPinModal(false); setNewPin(''); setConfirmPin(''); setPinError(null); };
 
   // Change Password State
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
@@ -81,6 +106,10 @@ export default function ProfileScreen() {
   const [contactPrimary, setContactPrimary] = useState(false);
 
   useEffect(() => {
+    if (section === 'notifications') {
+      const openSettings = setTimeout(() => setActiveTab('settings'), 0);
+      return () => clearTimeout(openSettings);
+    }
     if (section !== 'contacts') return;
     const openContactsTimer = setTimeout(() => {
       setActiveTab('family');
@@ -159,55 +188,64 @@ export default function ProfileScreen() {
     if (value) {
       const storedPin = await AsyncStorage.getItem('@app_lock_pin');
       if (!storedPin) {
+        setNewPin(''); setConfirmPin(''); setPinError(null);
         setShowPinModal(true);
       } else {
         await AsyncStorage.setItem('@app_lock_enabled', 'true');
         setAppLockEnabled(true);
-        Alert.alert('เปิดใช้งานแล้ว 🔐', 'ระบบจะถาม PIN/Biometric เมื่อเปิดแอป');
+        Alert.success('เปิดใช้งานแล้ว 🔐', 'ระบบจะถาม PIN/Biometric เมื่อเปิดแอป');
       }
     } else {
       await AsyncStorage.setItem('@app_lock_enabled', 'false');
       setAppLockEnabled(false);
-      Alert.alert('ปิดใช้งานแล้ว', 'ยกเลิกการล็อกแอปเรียบร้อย');
+      Alert.success('ปิดใช้งานแล้ว', 'ยกเลิกการล็อกแอปเรียบร้อย');
     }
   };
 
   const handleSavePin = async () => {
-    if (newPin.length !== 4) {
-      Alert.alert('แจ้งเตือน', 'กรุณากรอก PIN ให้ครบ 4 หลัก');
-      return;
-    }
-    await AsyncStorage.setItem('@app_lock_pin', newPin);
-    await AsyncStorage.setItem('@app_lock_enabled', 'true');
-    setAppLockEnabled(true);
-    setShowPinModal(false);
-    setNewPin('');
-    Alert.alert('สำเร็จ! 🎉', 'ตั้งค่า PIN 4 หลัก และเปิดใช้งานการล็อกแอปเรียบร้อยแล้ว');
+    if (savingPin) return;
+    const error = validatePinPair(newPin, confirmPin);
+    setPinError(error);
+    if (error) return;
+    setSavingPin(true);
+    try {
+      await AsyncStorage.multiSet([['@app_lock_pin', newPin], ['@app_lock_enabled', 'true']]);
+      setAppLockEnabled(true);
+      setShowPinModal(false); setNewPin(''); setConfirmPin(''); setPinError(null);
+      Alert.success('ตั้งค่า PIN แล้ว', 'ยืนยันรหัสตรงกัน และเปิดการล็อกแอปเรียบร้อยแล้ว');
+    } catch (error) { Alert.error('บันทึก PIN ไม่สำเร็จ', getFriendlyErrorMessage(error)); }
+    finally { setSavingPin(false); }
   };
 
   const handleTestAppNotification = async () => {
+    if (testingAppNotification) return;
+    setTestingAppNotification(true);
     try {
-      setTestingAppNotification(true);
-      const enabled = await registerForPushNotificationsAsync();
-      if (!enabled) {
-        Alert.alert('ยังไม่ได้เปิดการแจ้งเตือน', 'กรุณาอนุญาตการแจ้งเตือนของ LookLanCare ในการตั้งค่ามือถือ');
+      const scheduled = await sendLocalTestNotification();
+      if (!scheduled) {
+        Alert.error('ยังทดสอบไม่ได้', 'กรุณาอนุญาตการแจ้งเตือนในตั้งค่ามือถือ และใช้แอปบนมือถือ');
         return;
       }
+      Alert.success('ตั้งเวลาทดสอบแล้ว', `ดูการแจ้งเตือนในแถบแจ้งเตือนภายใน ${forms.notificationTestDelaySeconds} วินาที เป็นการทดสอบเฉพาะเครื่องนี้`);
+    } catch (error) { Alert.error('ทดสอบไม่สำเร็จ', getFriendlyErrorMessage(error)); }
+    finally { setTestingAppNotification(false); }
+  };
 
-      const sent = await sendLocalTestNotification();
-      const remoteReady = await AsyncStorage.getItem(STORAGE_KEY_PUSH_REGISTRATION) === 'remote_ready';
-      Alert.alert(
-        sent ? 'ทดสอบสำเร็จ' : 'ทดสอบไม่สำเร็จ',
-        sent
-          ? remoteReady ? 'การแจ้งเตือนบนเครื่องนี้ทำงานแล้ว · ยังต้องทดสอบรับเหตุจากเครื่องตรวจ'
-            : 'การแจ้งเตือนบนเครื่องนี้ทำงานแล้ว · รับแจ้งเตือนจากเครื่องอื่นยังไม่พร้อม'
-          : 'กรุณาตรวจสิทธิ์การแจ้งเตือนแล้วลองอีกครั้ง',
-      );
+  const handleTestRemoteNotification = async () => {
+    if (remoteTestBusy.current || testingAppNotification || !userId) return;
+    remoteTestBusy.current = true;
+    setTestingAppNotification(true);
+    let testId: string | undefined;
+    try {
+      testId = uuid();
+      await startPhoneTest(userId, testId);
+      const { accepted, correlated } = await sendRemoteSelfTestNotification(testId, userId);
+      await finishPhoneTest(userId, testId, accepted, correlated);
+      if (!accepted) { Alert.error('รับจากระบบส่วนกลางยังไม่พร้อม', 'ยังลงทะเบียนรับข้อความไม่ได้ กรุณาตรวจอินเทอร์เน็ต สิทธิ์แจ้งเตือน และใช้ APK ที่ตั้งค่า Firebase แล้ว'); return; }
     } catch (error) {
-      Alert.alert('ทดสอบไม่สำเร็จ', getFriendlyErrorMessage(error));
-    } finally {
-      setTestingAppNotification(false);
-    }
+      if (testId) await finishPhoneTest(userId, testId, false, false).catch(() => undefined);
+      Alert.error('ทดสอบไม่สำเร็จ', getFriendlyErrorMessage(error));
+    } finally { remoteTestBusy.current = false; setTestingAppNotification(false); }
   };
 
   const handleCopyFamilyCode = () => {
@@ -219,7 +257,7 @@ export default function ProfileScreen() {
       message: familyCode,
       title: 'รหัสครอบครัว LookLanCare',
     });
-    Alert.alert('คัดลอกรหัสแล้ว 📋', `รหัสครอบครัว: ${familyCode}`);
+    Alert.success('คัดลอกรหัสแล้ว 📋', `รหัสครอบครัว: ${familyCode}`);
   };
 
   const handleShareFamilyCode = async () => {
@@ -243,7 +281,7 @@ export default function ProfileScreen() {
       await signOutCurrentDevice();
       router.replace('/login');
     } catch (error: any) {
-      Alert.alert('เกิดข้อผิดพลาดในการออกจากระบบ', error.message);
+      Alert.error('เกิดข้อผิดพลาดในการออกจากระบบ', error.message);
     } finally {
       setSaving(false);
     }
@@ -251,15 +289,15 @@ export default function ProfileScreen() {
 
   const handleChangePassword = async () => {
     if (!newAccountPassword || !confirmAccountPassword) {
-      Alert.alert('ข้อมูลไม่ครบถ้วน', 'กรุณากรอกรหัสผ่านใหม่และยืนยันรหัสผ่าน');
+      Alert.error('ข้อมูลไม่ครบถ้วน', 'กรุณากรอกรหัสผ่านใหม่และยืนยันรหัสผ่าน');
       return;
     }
     if (newAccountPassword !== confirmAccountPassword) {
-      Alert.alert('รหัสผ่านไม่ตรงกัน', 'รหัสผ่านใหม่และการยืนยันรหัสผ่านไม่ตรงกัน');
+      Alert.error('รหัสผ่านไม่ตรงกัน', 'รหัสผ่านใหม่และการยืนยันรหัสผ่านไม่ตรงกัน');
       return;
     }
     if (newAccountPassword.length < 8) {
-      Alert.alert('รหัสผ่านสั้นเกินไป', 'เพื่อความปลอดภัย รหัสผ่านต้องมีความยาวอย่างน้อย 8 ตัวอักษรขึ้นไป');
+      Alert.error('รหัสผ่านสั้นเกินไป', 'เพื่อความปลอดภัย รหัสผ่านต้องมีความยาวอย่างน้อย 8 ตัวอักษรขึ้นไป');
       return;
     }
 
@@ -268,12 +306,12 @@ export default function ProfileScreen() {
       const { error } = await supabase.auth.updateUser({ password: newAccountPassword });
       if (error) throw error;
 
-      Alert.alert('สำเร็จ! 🎉', 'เปลี่ยนรหัสผ่านของคุณเรียบร้อยแล้ว');
+      Alert.success('สำเร็จ! 🎉', 'เปลี่ยนรหัสผ่านของคุณเรียบร้อยแล้ว');
       setShowChangePasswordModal(false);
       setNewAccountPassword('');
       setConfirmAccountPassword('');
     } catch (e: any) {
-      Alert.alert('เกิดข้อผิดพลาดในการเปลี่ยนรหัสผ่าน', e.message);
+      Alert.error('เกิดข้อผิดพลาดในการเปลี่ยนรหัสผ่าน', e.message);
     } finally {
       setChangingPassword(false);
     }
@@ -305,7 +343,7 @@ export default function ProfileScreen() {
         return;
       }
       if (!isValidMobilePhone(phoneNumber)) {
-        Alert.alert('เบอร์มือถือไม่ถูกต้อง', 'กรุณากรอกเบอร์มือถือ 10 หลัก โดยขึ้นต้นด้วย 0');
+        Alert.error('เบอร์มือถือไม่ถูกต้อง', 'กรุณากรอกเบอร์มือถือ 10 หลัก โดยขึ้นต้นด้วย 0');
         return;
       }
 
@@ -347,11 +385,11 @@ export default function ProfileScreen() {
 
       if (error) throw error;
 
-      Alert.alert('สำเร็จ', 'บันทึกข้อมูลโปรไฟล์เรียบร้อยแล้ว');
+      Alert.success('สำเร็จ', 'บันทึกข้อมูลโปรไฟล์เรียบร้อยแล้ว');
       router.back();
     } catch (error) {
       if (error instanceof Error) {
-        Alert.alert('เกิดข้อผิดพลาดในการบันทึก', error.message);
+        Alert.error('เกิดข้อผิดพลาดในการบันทึก', error.message);
       }
     } finally {
       setSaving(false);
@@ -360,7 +398,7 @@ export default function ProfileScreen() {
 
   const handleCall = async (phone: string) => {
     const opened = await callPhoneNumber(phone);
-    if (!opened) Alert.alert('โทรออกไม่ได้', 'กรุณาตรวจเบอร์ผู้ติดต่อ หรือโทรจากอุปกรณ์ที่รองรับการโทร');
+    if (!opened) Alert.error('โทรออกไม่ได้', 'กรุณาตรวจเบอร์ผู้ติดต่อ หรือโทรจากอุปกรณ์ที่รองรับการโทร');
   };
 
   const openAddContactModal = () => {
@@ -384,7 +422,7 @@ export default function ProfileScreen() {
     const cleanName = contactName.trim();
     const cleanPhone = normalizeMobilePhoneInput(contactPhone);
     if (!cleanName || !isValidMobilePhone(cleanPhone)) {
-      Alert.alert('ข้อมูลไม่ครบ', 'กรุณากรอกชื่อและเบอร์มือถือ 10 หลัก โดยขึ้นต้นด้วย 0');
+      Alert.error('ข้อมูลไม่ครบ', 'กรุณากรอกชื่อและเบอร์มือถือ 10 หลัก โดยขึ้นต้นด้วย 0');
       return;
     }
 
@@ -413,14 +451,14 @@ export default function ProfileScreen() {
       setShowContactModal(false);
       await loadProfile();
     } catch (error) {
-      Alert.alert('บันทึกผู้ติดต่อไม่สำเร็จ', getFriendlyErrorMessage(error));
+      Alert.error('บันทึกผู้ติดต่อไม่สำเร็จ', getFriendlyErrorMessage(error));
     } finally {
       setSaving(false);
     }
   };
 
   const handleDeleteContact = (id: string) => {
-    Alert.alert('ยืนยันการลบ', 'คุณแน่ใจหรือไม่ว่าต้องการลบรายชื่อนี้?', [
+    Alert.confirm('ยืนยันการลบ', 'คุณแน่ใจหรือไม่ว่าต้องการลบรายชื่อนี้?', [
       { text: 'ยกเลิก', style: 'cancel' },
       {
         text: 'ลบ', style: 'destructive', onPress: async () => {
@@ -430,7 +468,7 @@ export default function ProfileScreen() {
             if (error) throw error;
             loadProfile();
           } catch (error: any) {
-            Alert.alert('Error', error.message);
+            Alert.error('Error', error.message);
           } finally {
             setSaving(false);
           }
@@ -457,11 +495,13 @@ export default function ProfileScreen() {
 
       {loading ? (
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background }}>
-          <ActivityIndicator size="large" color="#059669" />
+          <ActivityIndicator size="large" color={colors.accentText} />
           <Text style={{ marginTop: 12, color: colors.textSecondary }}>กำลังโหลดข้อมูล...</Text>
         </View>
       ) : (
-        <ScrollView contentContainerStyle={[styles.scrollContent, { backgroundColor: colors.background }]} showsVerticalScrollIndicator={false}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <ScrollView keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={[styles.scrollContent, { backgroundColor: colors.background }]} showsVerticalScrollIndicator={false}>
+          {setup === 'true' && <SetupReturnButton />}
 
           {/* Segmented Control Switcher */}
           <View
@@ -479,7 +519,7 @@ export default function ProfileScreen() {
                 paddingVertical: 10,
                 borderRadius: 10,
                 alignItems: 'center',
-                backgroundColor: activeTab === 'profile' ? (isDarkMode ? '#334155' : '#ffffff') : 'transparent',
+                backgroundColor: activeTab === 'profile' ? (isDarkMode ? '#334155' : colors.card) : 'transparent',
                 elevation: activeTab === 'profile' ? 2 : 0,
               }}
               onPress={() => setActiveTab('profile')}
@@ -488,7 +528,7 @@ export default function ProfileScreen() {
                 style={{
                   fontSize: 12,
                   fontWeight: '800',
-                  color: activeTab === 'profile' ? (isDarkMode ? '#34d399' : '#059669') : colors.textSecondary,
+                  color: activeTab === 'profile' ? (isDarkMode ? '#34d399' : colors.accentText) : colors.textSecondary,
                 }}
               >
                 👤 โปรไฟล์
@@ -501,7 +541,7 @@ export default function ProfileScreen() {
                 paddingVertical: 10,
                 borderRadius: 10,
                 alignItems: 'center',
-                backgroundColor: activeTab === 'settings' ? (isDarkMode ? '#334155' : '#ffffff') : 'transparent',
+                backgroundColor: activeTab === 'settings' ? (isDarkMode ? '#334155' : colors.card) : 'transparent',
                 elevation: activeTab === 'settings' ? 2 : 0,
               }}
               onPress={() => setActiveTab('settings')}
@@ -510,7 +550,7 @@ export default function ProfileScreen() {
                 style={{
                   fontSize: 12,
                   fontWeight: '800',
-                  color: activeTab === 'settings' ? (isDarkMode ? '#34d399' : '#059669') : colors.textSecondary,
+                  color: activeTab === 'settings' ? (isDarkMode ? '#34d399' : colors.accentText) : colors.textSecondary,
                 }}
               >
                 ⚙️ ตั้งค่าแอป
@@ -523,7 +563,7 @@ export default function ProfileScreen() {
                 paddingVertical: 10,
                 borderRadius: 10,
                 alignItems: 'center',
-                backgroundColor: activeTab === 'family' ? (isDarkMode ? '#334155' : '#ffffff') : 'transparent',
+                backgroundColor: activeTab === 'family' ? (isDarkMode ? '#334155' : colors.card) : 'transparent',
                 elevation: activeTab === 'family' ? 2 : 0,
               }}
               onPress={() => setActiveTab('family')}
@@ -532,7 +572,7 @@ export default function ProfileScreen() {
                 style={{
                   fontSize: 12,
                   fontWeight: '800',
-                  color: activeTab === 'family' ? (isDarkMode ? '#34d399' : '#059669') : colors.textSecondary,
+                  color: activeTab === 'family' ? (isDarkMode ? '#34d399' : colors.accentText) : colors.textSecondary,
                 }}
               >
                 🏠 ครอบครัว
@@ -550,11 +590,11 @@ export default function ProfileScreen() {
                     {displayAvatarUri ? (
                       <Image source={{ uri: displayAvatarUri }} style={{ width: 76, height: 76, borderRadius: 38 }} />
                     ) : (
-                      <MaterialCommunityIcons name="account-plus-outline" size={40} color="#94a3b8" />
+                      <MaterialCommunityIcons name="account-plus-outline" size={40} color={colors.textMuted} />
                     )}
                   </View>
                   <View style={styles.cameraBadge}>
-                    <MaterialCommunityIcons name="camera" size={16} color="#ffffff" />
+                    <MaterialCommunityIcons name="camera" size={16} color={colors.onAccent} />
                   </View>
                 </TouchableOpacity>
                 <Text style={styles.profileTitle}>{fullName || 'ผู้ใช้งาน LookLanCare'}</Text>
@@ -587,19 +627,19 @@ export default function ProfileScreen() {
 
                 {/* Change Password Card */}
                 <TouchableOpacity
-                  style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#ffffff', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', marginTop: 4, marginBottom: 12 }}
+                  style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.card, padding: 14, borderRadius: 12, borderWidth: 1, borderColor: colors.cardBorder, marginTop: 4, marginBottom: 12 }}
                   onPress={() => setShowChangePasswordModal(true)}
                 >
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                    <View style={[styles.iconCircle, { backgroundColor: '#fef3c7' }]}>
-                      <MaterialCommunityIcons name="lock-reset" size={20} color="#d97706" />
+                    <View style={[styles.iconCircle, { backgroundColor: colors.warningBg }]}>
+                      <MaterialCommunityIcons name="lock-reset" size={20} color={colors.warningText} />
                     </View>
                     <View>
                       <Text style={styles.cardLabel}>เปลี่ยนรหัสผ่าน (Change Password)</Text>
                       <Text style={styles.cardSubtitle}>ตั้งค่ารหัสผ่านใหม่สำหรับเข้าสู่ระบบ</Text>
                     </View>
                   </View>
-                  <MaterialCommunityIcons name="chevron-right" size={20} color="#64748b" />
+                  <MaterialCommunityIcons name="chevron-right" size={20} color={colors.textSecondary} />
                 </TouchableOpacity>
               </View>
 
@@ -607,19 +647,19 @@ export default function ProfileScreen() {
               <View style={styles.actionsContainer}>
                 <TouchableOpacity style={styles.saveBtn} onPress={handleSave} disabled={saving}>
                   {saving ? (
-                    <ActivityIndicator color="#ffffff" />
+                    <ActivityIndicator color={colors.onAccent} />
                   ) : (
                     <Text style={styles.saveBtnText}>บันทึกข้อมูลโปรไฟล์</Text>
                   )}
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.cancelBtn, { backgroundColor: '#fef2f2', borderColor: '#fca5a5', flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginTop: 8 }]}
+                  style={[styles.cancelBtn, { backgroundColor: colors.dangerBg, borderColor: '#fca5a5', flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginTop: 8 }]}
                   onPress={handleLogout}
                   disabled={saving}
                 >
-                  <MaterialCommunityIcons name="logout" size={18} color="#dc2626" style={{ marginRight: 6 }} />
-                  <Text style={[styles.cancelBtnText, { color: '#dc2626', fontWeight: '800' }]}>ออกจากระบบ (Logout)</Text>
+                  <MaterialCommunityIcons name="logout" size={18} color={colors.dangerText} style={{ marginRight: 6 }} />
+                  <Text style={[styles.cancelBtnText, { color: colors.dangerText, fontWeight: '800' }]}>ออกจากระบบ (Logout)</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -631,14 +671,14 @@ export default function ProfileScreen() {
               {/* App Notification */}
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
-                  <MaterialCommunityIcons name="bell-ring-outline" size={20} color="#059669" />
+                  <MaterialCommunityIcons name="bell-ring-outline" size={20} color={colors.accentText} />
                   <Text style={styles.sectionTitle}>แจ้งเตือนในแอป</Text>
                 </View>
 
-                <View style={{ backgroundColor: '#ffffff', borderRadius: 14, padding: 14, borderWidth: 1, borderColor: '#e2e8f0' }}>
-                  <View style={{ backgroundColor: '#ecfdf5', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#a7f3d0', marginBottom: 12 }}>
-                    <Text style={{ fontSize: 13, color: '#047857', fontWeight: '800', marginBottom: 4 }}>ใช้ฟรีและไม่ต้องเชื่อมบัญชีอื่น</Text>
-                    <Text style={{ fontSize: 11, color: '#475569', lineHeight: 17 }}>
+                <View style={{ backgroundColor: colors.card, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: colors.cardBorder }}>
+                  <View style={{ backgroundColor: colors.accentBg, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#a7f3d0', marginBottom: 12 }}>
+                    <Text style={{ fontSize: 13, color: colors.accentText, fontWeight: '800', marginBottom: 4 }}>ใช้ฟรีและไม่ต้องเชื่อมบัญชีอื่น</Text>
+                    <Text style={{ fontSize: 11, color: colors.textSecondary, lineHeight: 17 }}>
                       รับเหตุล้มและ SOS บนมือถือผ่าน LookLanCare พร้อมเปิดดูเวลา กล้อง บุคคล และภาพหลักฐานในแอป
                     </Text>
                   </View>
@@ -651,26 +691,42 @@ export default function ProfileScreen() {
                     {testingAppNotification ? (
                       <ActivityIndicator color="#fff" size="small" />
                     ) : (
-                      <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: '800' }}>ทดสอบการแจ้งเตือนบนมือถือเครื่องนี้</Text>
+                      <Text style={{ color: colors.onAccent, fontSize: 12, fontWeight: '800' }}>ทดสอบการแจ้งเตือนบนมือถือเครื่องนี้</Text>
                     )}
                   </TouchableOpacity>
-                  <Text style={{ fontSize: 10, color: '#64748b', lineHeight: 15, marginTop: 8, textAlign: 'center' }}>
-                    ปุ่มนี้ทดสอบเฉพาะมือถือเครื่องนี้ การแจ้งเตือนจากคอมขณะปิดแอปต้องเชื่อมบริการแจ้งเตือน Android ก่อน
+                  <Text style={{ fontSize: 10, color: colors.textSecondary, lineHeight: 15, marginTop: 8, textAlign: 'center' }}>
+                    ปุ่มแรกตรวจการเตือนในเครื่อง ปุ่มด้านล่างส่งจากระบบส่วนกลางมายังมือถือเครื่องนี้ โดยไม่ส่งให้คนอื่นในครอบครัว
                   </Text>
+                  <TouchableOpacity onPress={handleTestRemoteNotification} disabled={testingAppNotification || !userId}
+                    accessibilityRole="button" accessibilityLabel="ทดสอบรับแจ้งเตือนจากระบบส่วนกลาง"
+                    style={{ minHeight: 48, padding: 12, marginTop: 12, borderRadius: 12, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ color: colors.onAccent, fontSize: 16, fontWeight: '800' }}>ทดสอบรับจากระบบส่วนกลาง</Text>
+                  </TouchableOpacity>
+                  {currentTest && <View accessibilityLiveRegion="polite" style={{ marginTop: 12, gap: 6 }}>
+                    <Text style={{ color: colors.textPrimary, fontWeight: '700' }}>ผลทดสอบล่าสุด · มือถือเครื่องนี้</Text>
+                    <Text style={{ color: colors.textSecondary }}>เริ่มทดสอบ {new Date(currentTest.requestedAt).toLocaleString('th-TH')}</Text>
+                    {currentTest.sentAt && <Text style={{ color: colors.textSecondary }}>ระบบตอบรับการส่งแล้ว {new Date(currentTest.sentAt).toLocaleTimeString('th-TH')}</Text>}
+                    <Text style={{ color: currentTest.observedAt ? colors.accentText : colors.textSecondary }}>
+                      {currentTest.observedAt ? `มือถือผู้ดูแลได้รับแล้ว · แอปตรวจพบเมื่อ ${new Date(currentTest.observedAt).toLocaleString('th-TH')}`
+                        : currentTest.failed ? 'ยังยืนยันการส่งไม่ได้ กดทดสอบใหม่ได้'
+                        : currentTest.sentAt && !currentTest.correlated ? 'ระบบส่วนกลางรุ่นนี้ยังยืนยันการรับแยกรายครั้งไม่ได้'
+                        : 'ยังไม่มีการตอบรับจากมือถือสำหรับครั้งนี้'}
+                    </Text>
+                  </View>}
                 </View>
               </View>
 
               {/* Security & Theme Settings */}
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
-                  <MaterialCommunityIcons name="shield-account-outline" size={20} color="#059669" />
+                  <MaterialCommunityIcons name="shield-account-outline" size={20} color={colors.accentText} />
                   <Text style={styles.sectionTitle}>ความปลอดภัย & การแสดงผล</Text>
                 </View>
 
-                <View style={[styles.settingCard, seniorMode && { borderColor: '#059669', borderWidth: 2 }]}>
+                <View style={[styles.settingCard, seniorMode && { borderColor: colors.accent, borderWidth: 2 }]}>
                   <View style={styles.cardLeft}>
-                    <View style={[styles.iconCircle, { backgroundColor: '#dcfce7' }]}>
-                      <MaterialCommunityIcons name="human-cane" size={22} color="#047857" />
+                    <View style={[styles.iconCircle, { backgroundColor: colors.accentBg }]}>
+                      <MaterialCommunityIcons name="human-cane" size={22} color={colors.accentText} />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.cardLabel, { fontSize: 16 }]}>โหมดผู้สูงอายุ</Text>
@@ -708,8 +764,8 @@ export default function ProfileScreen() {
                 {/* App Lock Card */}
                 <View style={styles.settingCard}>
                   <View style={styles.cardLeft}>
-                    <View style={[styles.iconCircle, { backgroundColor: '#ecfdf5' }]}>
-                      <MaterialCommunityIcons name="lock-check-outline" size={20} color="#059669" />
+                    <View style={[styles.iconCircle, { backgroundColor: colors.accentBg }]}>
+                      <MaterialCommunityIcons name="lock-check-outline" size={20} color={colors.accentText} />
                     </View>
                     <View>
                       <Text style={styles.cardLabel}>ล็อกแอปด้วยรหัส</Text>
@@ -726,14 +782,14 @@ export default function ProfileScreen() {
 
                 {appLockEnabled && (
                   <TouchableOpacity
-                    style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#f8fafc', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', marginTop: 6 }}
+                    style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.background, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: colors.cardBorder, marginTop: 6 }}
                     onPress={() => setShowPinModal(true)}
                   >
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                      <MaterialCommunityIcons name="key-change" size={18} color="#059669" />
-                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#0f172a' }}>เปลี่ยน PIN 4 หลัก</Text>
+                      <MaterialCommunityIcons name="key-change" size={18} color={colors.accentText} />
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: colors.textPrimary }}>เปลี่ยน PIN 4 หลัก</Text>
                     </View>
-                    <MaterialCommunityIcons name="chevron-right" size={18} color="#64748b" />
+                    <MaterialCommunityIcons name="chevron-right" size={18} color={colors.textSecondary} />
                   </TouchableOpacity>
                 )}
               </View>
@@ -741,14 +797,14 @@ export default function ProfileScreen() {
               {/* System Notification Toggles */}
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
-                  <MaterialCommunityIcons name="bell-outline" size={20} color="#059669" />
+                  <MaterialCommunityIcons name="bell-outline" size={20} color={colors.accentText} />
                   <Text style={styles.sectionTitle}>การสวิตช์ระบบการเตือน</Text>
                 </View>
 
                 <View style={styles.settingCard}>
                   <View style={styles.cardLeft}>
-                    <View style={[styles.iconCircle, { backgroundColor: '#fee2e2' }]}>
-                      <MaterialCommunityIcons name="run-fast" size={20} color="#dc2626" />
+                    <View style={[styles.iconCircle, { backgroundColor: colors.dangerBg }]}>
+                      <MaterialCommunityIcons name="run-fast" size={20} color={colors.dangerText} />
                     </View>
                     <View>
                       <Text style={styles.cardLabel}>แจ้งเตือนเมื่อตรวจพบการล้ม</Text>
@@ -765,8 +821,8 @@ export default function ProfileScreen() {
 
                 <View style={styles.settingCard}>
                   <View style={styles.cardLeft}>
-                    <View style={[styles.iconCircle, { backgroundColor: '#dcfce7' }]}>
-                      <MaterialCommunityIcons name="file-document-outline" size={20} color="#059669" />
+                    <View style={[styles.iconCircle, { backgroundColor: colors.accentBg }]}>
+                      <MaterialCommunityIcons name="file-document-outline" size={20} color={colors.accentText} />
                     </View>
                     <View>
                       <Text style={styles.cardLabel}>สรุปกิจกรรมรายวัน</Text>
@@ -783,8 +839,8 @@ export default function ProfileScreen() {
 
                 <View style={styles.settingCard}>
                   <View style={styles.cardLeft}>
-                    <View style={[styles.iconCircle, { backgroundColor: '#f1f5f9' }]}>
-                      <MaterialCommunityIcons name="message-text-outline" size={20} color="#64748b" />
+                    <View style={[styles.iconCircle, { backgroundColor: colors.inputBg }]}>
+                      <MaterialCommunityIcons name="message-text-outline" size={20} color={colors.textSecondary} />
                     </View>
                     <View>
                       <Text style={styles.cardLabel}>ส่ง SMS ฉุกเฉิน</Text>
@@ -808,14 +864,14 @@ export default function ProfileScreen() {
               {/* Family Connection */}
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
-                  <MaterialCommunityIcons name="account-group" size={20} color="#059669" />
+                  <MaterialCommunityIcons name="account-group" size={20} color={colors.accentText} />
                   <Text style={styles.sectionTitle}>เชื่อมต่อกลุ่มครอบครัว</Text>
                 </View>
 
                 <View style={styles.card}>
                   <View style={styles.cardLeft}>
                     <View style={[styles.iconCircle, { backgroundColor: '#34d399' }]}>
-                      <MaterialCommunityIcons name="key-variant" size={20} color="#ffffff" />
+                      <MaterialCommunityIcons name="key-variant" size={20} color={colors.onAccent} />
                     </View>
                     <View>
                       <Text style={styles.cardLabel}>รหัสครอบครัว</Text>
@@ -823,7 +879,7 @@ export default function ProfileScreen() {
                     </View>
                   </View>
                   <TouchableOpacity style={styles.copyBtn} onPress={handleCopyFamilyCode}>
-                    <MaterialCommunityIcons name="content-copy" size={20} color="#059669" />
+                    <MaterialCommunityIcons name="content-copy" size={20} color={colors.accentText} />
                     <Text style={styles.copyText}>คัดลอก</Text>
                   </TouchableOpacity>
                 </View>
@@ -831,7 +887,7 @@ export default function ProfileScreen() {
                 <View style={styles.card}>
                   <View style={styles.cardLeft}>
                     <View style={[styles.iconCircle, { backgroundColor: '#e2e8f0' }]}>
-                      <MaterialCommunityIcons name="link-variant" size={20} color="#64748b" />
+                      <MaterialCommunityIcons name="link-variant" size={20} color={colors.textSecondary} />
                     </View>
                     <View>
                       <Text style={styles.cardLabel}>ลิงก์เชิญเข้าครอบครัว</Text>
@@ -839,7 +895,7 @@ export default function ProfileScreen() {
                     </View>
                   </View>
                   <TouchableOpacity style={styles.shareBtn} onPress={handleShareFamilyCode}>
-                    <MaterialCommunityIcons name="share-variant" size={16} color="#ffffff" />
+                    <MaterialCommunityIcons name="share-variant" size={16} color={colors.onAccent} />
                     <Text style={styles.shareText}>แชร์รหัส</Text>
                   </TouchableOpacity>
                 </View>
@@ -848,7 +904,7 @@ export default function ProfileScreen() {
               {/* Emergency Contacts */}
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
-                  <MaterialCommunityIcons name="map-marker-radius-outline" size={20} color="#dc2626" />
+                  <MaterialCommunityIcons name="map-marker-radius-outline" size={20} color={colors.dangerText} />
                   <Text style={styles.sectionTitle}>รายชื่อติดต่อฉุกเฉิน</Text>
                 </View>
 
@@ -859,8 +915,8 @@ export default function ProfileScreen() {
                     onPress={() => handleCall(contact.phone)}
                   >
                     <View style={styles.cardLeft}>
-                      <View style={[styles.iconCircle, { backgroundColor: '#e0f2fe' }]}>
-                        <MaterialCommunityIcons name={(contact?.icon_name || 'account-outline') as any} size={20} color="#0284c7" />
+                      <View style={[styles.iconCircle, { backgroundColor: colors.infoBg }]}>
+                        <MaterialCommunityIcons name={(contact?.icon_name || 'account-outline') as any} size={20} color={colors.infoText} />
                       </View>
                       <View>
                         <Text style={styles.cardLabel}>{contact.name}</Text>
@@ -881,7 +937,7 @@ export default function ProfileScreen() {
                           { text: 'ยกเลิก', style: 'cancel' }
                         ]);
                       }} style={{ padding: 8 }}>
-                        <MaterialCommunityIcons name="dots-vertical" size={20} color="#94a3b8" />
+                        <MaterialCommunityIcons name="dots-vertical" size={20} color={colors.textMuted} />
                       </TouchableOpacity>
                     </View>
                   </TouchableOpacity>
@@ -889,12 +945,12 @@ export default function ProfileScreen() {
 
                 {contacts.length === 0 && (
                   <View style={{ alignItems: 'center', marginVertical: 10 }}>
-                    <Text style={{ color: '#94a3b8', fontSize: 12 }}>ยังไม่มีรายชื่อผู้ติดต่อฉุกเฉิน</Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 12 }}>ยังไม่มีรายชื่อผู้ติดต่อฉุกเฉิน</Text>
                   </View>
                 )}
 
                 <TouchableOpacity style={styles.addContactBtn} onPress={openAddContactModal}>
-                  <MaterialCommunityIcons name="plus-circle-outline" size={18} color="#059669" style={{ marginRight: 8 }} />
+                  <MaterialCommunityIcons name="plus-circle-outline" size={18} color={colors.accentText} style={{ marginRight: 8 }} />
                   <Text style={styles.addContactText}>เพิ่มรายชื่อติดต่อฉุกเฉิน</Text>
                 </TouchableOpacity>
               </View>
@@ -902,16 +958,17 @@ export default function ProfileScreen() {
           )}
 
         </ScrollView>
+        </KeyboardAvoidingView>
       )}
 
       {/* Contact Modal */}
       <Modal visible={showContactModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalContainer}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.modalOverlay, { paddingTop: insets.top + 20 }]}>
+          <ScrollView keyboardShouldPersistTaps="handled" style={[styles.modalContainer, { flexGrow: 0, maxHeight: '90%', backgroundColor: colors.card }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>{editingContactId ? 'แก้ไขรายชื่อ' : 'เพิ่มรายชื่อใหม่'}</Text>
               <TouchableOpacity onPress={() => setShowContactModal(false)}>
-                <MaterialCommunityIcons name="close" size={24} color="#64748b" />
+                <MaterialCommunityIcons name="close" size={24} color={colors.textSecondary} />
               </TouchableOpacity>
             </View>
 
@@ -951,66 +1008,51 @@ export default function ProfileScreen() {
 
               <TouchableOpacity style={styles.saveBtn} onPress={handleSaveContact} disabled={saving}>
                 {saving ? (
-                  <ActivityIndicator color="#ffffff" />
+                  <ActivityIndicator color={colors.onAccent} />
                 ) : (
                   <Text style={styles.saveBtnText}>บันทึกข้อมูล</Text>
                 )}
               </TouchableOpacity>
             </View>
-          </KeyboardAvoidingView>
-        </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
 
-      {/* PIN Setup Modal */}
-      <Modal visible={showPinModal} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContainer, { padding: 24, borderRadius: 20 }]}>
-            <View style={{ alignItems: 'center', marginBottom: 16 }}>
-              <View style={[styles.iconCircle, { width: 56, height: 56, borderRadius: 28, backgroundColor: '#ecfdf5', marginBottom: 10 }]}>
-                <MaterialCommunityIcons name="shield-key" size={28} color="#059669" />
-              </View>
-              <Text style={{ fontSize: 18, fontWeight: '800', color: '#0f172a' }}>ตั้งค่า PIN 4 หลัก</Text>
-              <Text style={{ fontSize: 12, color: '#64748b', marginTop: 4, textAlign: 'center' }}>
-                กำหนด PIN สำหรับปลดล็อกแอป LookLanCare เพื่อป้องกันข้อมูลผู้สูงอายุ
-              </Text>
-            </View>
-
-            <TextInput
-              style={[styles.input, { fontSize: 24, fontWeight: '900', letterSpacing: 12, textAlign: 'center', marginVertical: 12 }]}
-              keyboardType="number-pad"
-              maxLength={4}
-              secureTextEntry
-              value={newPin}
-              onChangeText={setNewPin}
-              placeholder="••••"
-            />
-
-            <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
-              <TouchableOpacity
-                style={[styles.saveBtn, { flex: 1, backgroundColor: '#f1f5f9' }]}
-                onPress={() => { setShowPinModal(false); setNewPin(''); }}
-              >
-                <Text style={{ color: '#64748b', fontWeight: '700' }}>ยกเลิก</Text>
+      {/* PIN is committed only after the two entries match. */}
+      <Modal visible={showPinModal} transparent animationType="fade" onRequestClose={closePinModal}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.modalOverlay, { paddingTop: insets.top + 20 }]}>
+          <ScrollView style={[styles.modalContainer, { flexGrow: 0, maxHeight: '90%', backgroundColor: colors.card }]} keyboardShouldPersistTaps="handled">
+            <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>ตั้งค่า PIN {PIN_LENGTH} หลัก</Text>
+            <Text style={{ color: colors.textSecondary, marginBottom: 16 }}>กรอกรหัสสองครั้งเพื่อป้องกันการพิมพ์ผิด</Text>
+            <Text style={{ color: colors.textPrimary }}>PIN ใหม่</Text>
+            <TextInput style={[styles.input, { color: colors.textPrimary, backgroundColor: colors.inputBg, fontSize: 24, textAlign: 'center', marginVertical: 12 }]}
+              accessibilityLabel="PIN ใหม่" keyboardType="number-pad" maxLength={PIN_LENGTH} secureTextEntry value={newPin}
+              editable={!savingPin} onChangeText={value => { setNewPin(normalizePin(value)); setPinError(null); }} placeholder="••••" placeholderTextColor={colors.textMuted} />
+            <Text style={{ color: colors.textPrimary }}>ยืนยัน PIN อีกครั้ง</Text>
+            <TextInput style={[styles.input, { color: colors.textPrimary, backgroundColor: colors.inputBg, fontSize: 24, textAlign: 'center', marginVertical: 12 }]}
+              accessibilityLabel="ยืนยัน PIN อีกครั้ง" keyboardType="number-pad" maxLength={PIN_LENGTH} secureTextEntry value={confirmPin}
+              editable={!savingPin} onChangeText={value => { setConfirmPin(normalizePin(value)); setPinError(null); }} placeholder="••••" placeholderTextColor={colors.textMuted} />
+            {pinError && <Text accessibilityRole="alert" style={{ color: colors.dangerText }}>{pinError}</Text>}
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 12, paddingBottom: Math.max(insets.bottom, 12) }}>
+              <TouchableOpacity accessibilityRole="button" style={[styles.saveBtn, { flex: 1, minHeight: 48, backgroundColor: colors.inputBg }]} disabled={savingPin} onPress={closePinModal}>
+                <Text style={{ color: colors.textPrimary, fontWeight: '700' }}>ยกเลิก</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.saveBtn, { flex: 1, backgroundColor: '#059669' }]}
-                onPress={handleSavePin}
-              >
-                <Text style={{ color: '#ffffff', fontWeight: '700' }}>บันทึก PIN</Text>
+              <TouchableOpacity accessibilityRole="button" style={[styles.saveBtn, { flex: 1, minHeight: 48, backgroundColor: colors.accent }]} disabled={savingPin} onPress={handleSavePin}>
+                {savingPin ? <ActivityIndicator color={colors.onAccent} /> : <Text style={{ color: colors.onAccent, fontWeight: '700' }}>บันทึก PIN</Text>}
               </TouchableOpacity>
             </View>
-          </View>
-        </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Change Password Modal */}
       <Modal visible={showChangePasswordModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalContainer}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.modalOverlay, { paddingTop: insets.top + 20 }]}>
+          <ScrollView keyboardShouldPersistTaps="handled" style={[styles.modalContainer, { flexGrow: 0, maxHeight: '90%', backgroundColor: colors.card }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>เปลี่ยนรหัสผ่านใหม่</Text>
               <TouchableOpacity onPress={() => setShowChangePasswordModal(false)}>
-                <MaterialCommunityIcons name="close" size={24} color="#64748b" />
+                <MaterialCommunityIcons name="close" size={24} color={colors.textSecondary} />
               </TouchableOpacity>
             </View>
 
@@ -1041,23 +1083,23 @@ export default function ProfileScreen() {
 
               <TouchableOpacity style={styles.saveBtn} onPress={handleChangePassword} disabled={changingPassword}>
                 {changingPassword ? (
-                  <ActivityIndicator color="#ffffff" />
+                  <ActivityIndicator color={colors.onAccent} />
                 ) : (
                   <Text style={styles.saveBtnText}>บันทึกรหัสผ่านใหม่</Text>
                 )}
               </TouchableOpacity>
             </View>
-          </KeyboardAvoidingView>
-        </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#f8fafc',
+    backgroundColor: colors.background,
   },
   header: {
     flexDirection: 'row',
@@ -1065,9 +1107,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 16,
-    backgroundColor: '#ffffff',
+    backgroundColor: colors.card,
     borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+    borderBottomColor: colors.separator,
   },
   headerLeft: {
     flexDirection: 'row',
@@ -1076,7 +1118,7 @@ const styles = StyleSheet.create({
   logoPlaceholder: {
     width: 32,
     height: 32,
-    backgroundColor: '#ecfdf5',
+    backgroundColor: colors.accentBg,
     borderRadius: 8,
     justifyContent: 'center',
     alignItems: 'center',
@@ -1085,18 +1127,18 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 14,
     fontWeight: 'bold',
-    color: '#059669',
+    color: colors.accentText,
     letterSpacing: 1,
   },
   profileBtn: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#f1f5f9',
+    backgroundColor: colors.inputBg,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: colors.cardBorder,
   },
   scrollContent: {
     padding: 20,
@@ -1115,8 +1157,8 @@ const styles = StyleSheet.create({
     height: 80,
     borderRadius: 40,
     borderWidth: 2,
-    borderColor: '#059669',
-    backgroundColor: '#f8fafc',
+    borderColor: colors.accent,
+    backgroundColor: colors.background,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1131,17 +1173,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2,
-    borderColor: '#ffffff',
+    borderColor: colors.card,
   },
   profileTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#0f172a',
+    color: colors.textPrimary,
     marginBottom: 4,
   },
   profileSubtitle: {
     fontSize: 12,
-    color: '#64748b',
+    color: colors.textSecondary,
   },
   formSection: {
     marginBottom: 24,
@@ -1152,18 +1194,18 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 12,
     fontWeight: 'bold',
-    color: '#0f172a',
+    color: colors.textPrimary,
     marginBottom: 8,
   },
   input: {
-    backgroundColor: '#ffffff',
+    backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: '#cbd5e1',
     borderRadius: 8,
     paddingHorizontal: 16,
     paddingVertical: Platform.OS === 'ios' ? 12 : 10,
     fontSize: 14,
-    color: '#0f172a',
+    color: colors.textPrimary,
   },
   section: {
     marginBottom: 24,
@@ -1176,14 +1218,14 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#0f172a',
+    color: colors.textPrimary,
     marginLeft: 8,
   },
   card: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#f8fafc',
+    backgroundColor: colors.background,
     borderWidth: 1,
     borderColor: '#cbd5e1',
     borderRadius: 8,
@@ -1206,24 +1248,24 @@ const styles = StyleSheet.create({
   cardLabel: {
     fontSize: 12,
     fontWeight: 'bold',
-    color: '#0f172a',
+    color: colors.textPrimary,
   },
   cardCode: {
     fontSize: 16,
     fontWeight: '900',
-    color: '#059669',
+    color: colors.accentText,
     letterSpacing: 2,
   },
   cardSubtitle: {
     fontSize: 10,
-    color: '#64748b',
+    color: colors.textSecondary,
   },
   copyBtn: {
     alignItems: 'center',
   },
   copyText: {
     fontSize: 10,
-    color: '#059669',
+    color: colors.accentText,
     fontWeight: 'bold',
     marginTop: 2,
   },
@@ -1236,7 +1278,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   shareText: {
-    color: '#ffffff',
+    color: colors.onAccent,
     fontSize: 12,
     fontWeight: 'bold',
     marginLeft: 4,
@@ -1245,7 +1287,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#ffffff',
+    backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: '#cbd5e1',
     borderRadius: 8,
@@ -1256,7 +1298,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#ffffff',
+    backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: '#dc2626',
     borderRadius: 8,
@@ -1267,7 +1309,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#ffffff',
+    backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: '#cbd5e1',
     borderRadius: 8,
@@ -1286,7 +1328,7 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   primaryBadgeText: {
-    color: '#ffffff',
+    color: colors.onAccent,
     fontSize: 8,
     fontWeight: 'bold',
   },
@@ -1296,13 +1338,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 12,
     borderWidth: 1,
-    borderColor: '#059669',
+    borderColor: colors.accent,
     borderStyle: 'dashed',
     borderRadius: 8,
     marginTop: 4,
   },
   addContactText: {
-    color: '#059669',
+    color: colors.accentText,
     fontSize: 12,
     fontWeight: 'bold',
   },
@@ -1317,12 +1359,12 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   saveBtnText: {
-    color: '#ffffff',
+    color: colors.onAccent,
     fontSize: 14,
     fontWeight: 'bold',
   },
   cancelBtn: {
-    backgroundColor: '#ffffff',
+    backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: '#fecaca',
     borderRadius: 8,
@@ -1330,7 +1372,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   cancelBtnText: {
-    color: '#dc2626',
+    color: colors.dangerText,
     fontSize: 14,
     fontWeight: 'bold',
   },
@@ -1340,7 +1382,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modalContainer: {
-    backgroundColor: '#ffffff',
+    backgroundColor: colors.card,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     padding: 24,
@@ -1355,7 +1397,7 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#0f172a',
+    color: colors.textPrimary,
   },
   modalBody: {
     marginTop: 8,

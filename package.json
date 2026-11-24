@@ -1,7 +1,7 @@
 {
   "name": "llc",
   "main": "expo-router/entry",
-  "version": "1.0.6",
+  "version": "1.0.34",
   "dependencies": {
     "@expo/ui": "~57.0.21",
     "@expo/vector-icons": "^15.0.2",

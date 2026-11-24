@@ -1,13 +1,14 @@
+import { CareText as Text } from '../../components/CareText';
+import { AppAlert as Alert } from '../../lib/appAlert';
+import { useTheme, type ThemeColors } from '../../context/ThemeContext';
 import { useCallback, useState } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
   Modal,
-  Alert,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,6 +17,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from 'expo-router';
 import { getFallEvents, FallEvidenceRecord } from '../../lib/fallEvidence';
 import { supabase } from '../../lib/supabase';
+import { EventDeliveryStatus } from '../../components/EventDeliveryStatus';
 
 export interface HistoryEvent {
   id: string;
@@ -32,6 +34,8 @@ export interface HistoryEvent {
 
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
+  const styles = createStyles(colors);
   const [history, setHistory] = useState<HistoryEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
@@ -74,7 +78,7 @@ export default function HistoryScreen() {
   );
 
   const clearHistory = () => {
-    Alert.alert(
+    Alert.confirm(
       'ล้างประวัติเหตุการณ์',
       'คุณต้องการล้างประวัติเหตุการณ์ทั้งหมดใช่หรือไม่?',
       [
@@ -86,13 +90,15 @@ export default function HistoryScreen() {
             try {
               const familyId = await AsyncStorage.getItem('familyId');
               if (familyId) {
-                await supabase.from('fall_events').delete().eq('family_id', familyId);
+                const { error } = await supabase.from('fall_events').delete().eq('family_id', familyId);
+                if (error) throw error;
               }
               await AsyncStorage.removeItem('@fall_history');
               await AsyncStorage.removeItem('@fall_evidence_records');
               setHistory([]);
-            } catch (e) {
-              console.log('Error clearing history', e);
+              Alert.success('ล้างประวัติแล้ว', 'ลบเหตุการณ์ที่บันทึกเรียบร้อย');
+            } catch {
+              Alert.error('ล้างประวัติไม่สำเร็จ', 'กรุณาตรวจสิทธิ์และการเชื่อมต่อ แล้วลองใหม่');
             }
           },
         },
@@ -123,7 +129,7 @@ export default function HistoryScreen() {
       <View style={[styles.header, { paddingTop: Math.max(insets.top + 10, 14) }]}>
         <View style={styles.headerLeft}>
           <View style={styles.logoPlaceholder}>
-            <MaterialCommunityIcons name="clock-outline" size={20} color="#059669" />
+            <MaterialCommunityIcons name="clock-outline" size={20} color={colors.accentText} />
           </View>
           <Text style={styles.headerTitle}>ประวัติเหตุการณ์ (Cloud)</Text>
         </View>
@@ -142,12 +148,12 @@ export default function HistoryScreen() {
         </View>
 
         {loading ? (
-          <ActivityIndicator size="large" color="#059669" style={{ marginTop: 40 }} />
+          <ActivityIndicator size="large" color={colors.accentText} style={{ marginTop: 40 }} />
         ) : history.length === 0 ? (
           <View style={styles.emptyState}>
-            <MaterialCommunityIcons name="clipboard-check-outline" size={48} color="#94a3b8" />
+            <MaterialCommunityIcons name="clipboard-check-outline" size={48} color={colors.textMuted} />
             <Text style={styles.emptyText}>ยังไม่มีประวัติเหตุการณ์</Text>
-            <Text style={styles.emptySubtext}>เหตุการณ์ปกติดี ไม่มีใครล้ม</Text>
+            <Text style={styles.emptySubtext}>เหตุที่บันทึกจะแสดงที่นี่</Text>
           </View>
         ) : (
           <View style={styles.timeline}>
@@ -183,14 +189,14 @@ export default function HistoryScreen() {
                     {/* Member & Location Info */}
                     <View style={styles.metaRow}>
                       <View style={styles.metaBadge}>
-                        <MaterialCommunityIcons name="account-heart" size={13} color="#059669" />
+                        <MaterialCommunityIcons name="account-heart" size={13} color={colors.accentText} />
                         <Text style={styles.metaBadgeText}>
                           {event.member_name || 'ยังไม่ยืนยันตัวบุคคล'}
                         </Text>
                       </View>
-                      <View style={[styles.metaBadge, { backgroundColor: '#f1f5f9' }]}>
-                        <MaterialCommunityIcons name="cctv" size={13} color="#64748b" />
-                        <Text style={[styles.metaBadgeText, { color: '#475569' }]}>
+                      <View style={[styles.metaBadge, { backgroundColor: colors.inputBg }]}>
+                        <MaterialCommunityIcons name="cctv" size={13} color={colors.textSecondary} />
+                        <Text style={[styles.metaBadgeText, { color: colors.textSecondary }]}>
                           {event.camera_name || 'กล้องวงจรปิด'}
                         </Text>
                       </View>
@@ -201,12 +207,12 @@ export default function HistoryScreen() {
                       <View style={styles.telemetryRow}>
                         {event.torso_angle !== undefined && (
                           <Text style={styles.telemetryText}>
-                            📐 มุมลำตัว: <Text style={{ fontWeight: '700', color: '#0f172a' }}>{event.torso_angle}°</Text>
+                            📐 มุมลำตัว: <Text style={{ fontWeight: '700', color: colors.textPrimary }}>{event.torso_angle}°</Text>
                           </Text>
                         )}
                         {event.ground_duration !== undefined && (
                           <Text style={styles.telemetryText}>
-                            ⏱️ นอนติดพื้น: <Text style={{ fontWeight: '700', color: '#0f172a' }}>{event.ground_duration}s</Text>
+                            ⏱️ นอนติดพื้น: <Text style={{ fontWeight: '700', color: colors.textPrimary }}>{event.ground_duration}s</Text>
                           </Text>
                         )}
                       </View>
@@ -224,12 +230,13 @@ export default function HistoryScreen() {
                           contentFit="cover"
                         />
                         <View style={styles.thumbnailOverlay}>
-                          <MaterialCommunityIcons name="magnify-plus-outline" size={16} color="#ffffff" />
+                          <MaterialCommunityIcons name="magnify-plus-outline" size={16} color={colors.onAccent} />
                           <Text style={styles.thumbnailText}>ดูภาพหลักฐาน</Text>
                         </View>
                       </TouchableOpacity>
                     )}
 
+                    {isActual ? <EventDeliveryStatus eventId={event.id} /> : null}
                     {event.details ? (
                       <Text style={styles.eventDetailsText}>{event.details}</Text>
                     ) : null}
@@ -239,7 +246,7 @@ export default function HistoryScreen() {
                         <MaterialCommunityIcons
                           name={isActual ? 'alert-circle' : isSos ? 'bell-ring' : 'shield-alert-outline'}
                           size={15}
-                          color={isActual ? '#ef4444' : isSos ? '#9333ea' : '#eab308'}
+                          color={isActual ? colors.dangerText : isSos ? colors.purpleText : colors.warningText}
                         />
                         <Text style={styles.eventDate}>{formatDate(event.timestamp)}</Text>
                       </View>
@@ -260,7 +267,7 @@ export default function HistoryScreen() {
                               : styles.statusNotifiedText,
                           ]}
                         >
-                          {event.status === 'responded' ? '✓ ช่วยเหลือแล้ว' : 'แจ้งเตือนแล้ว'}
+                          {event.status === 'responded' ? '✓ รับทราบแล้ว' : 'บันทึกเหตุแล้ว'}
                         </Text>
                       </View>
                     </View>
@@ -273,13 +280,13 @@ export default function HistoryScreen() {
       </ScrollView>
 
       {/* Fullscreen Photo Modal */}
-      <Modal visible={!!selectedPhoto} transparent animationType="fade">
+      <Modal visible={!!selectedPhoto} transparent animationType="fade" onRequestClose={() => setSelectedPhoto(null)}>
         <View style={styles.modalBg}>
           <TouchableOpacity
             style={styles.modalCloseBtn}
             onPress={() => setSelectedPhoto(null)}
           >
-            <MaterialCommunityIcons name="close" size={24} color="#ffffff" />
+            <MaterialCommunityIcons name="close" size={24} color={colors.onAccent} />
           </TouchableOpacity>
           {selectedPhoto && (
             <Image
@@ -294,10 +301,10 @@ export default function HistoryScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8fafc',
+    backgroundColor: colors.background,
   },
   header: {
     flexDirection: 'row',
@@ -305,9 +312,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 16,
-    backgroundColor: '#ffffff',
+    backgroundColor: colors.card,
     borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+    borderBottomColor: colors.separator,
   },
   headerLeft: {
     flexDirection: 'row',
@@ -316,7 +323,7 @@ const styles = StyleSheet.create({
   logoPlaceholder: {
     width: 32,
     height: 32,
-    backgroundColor: '#ecfdf5',
+    backgroundColor: colors.accentBg,
     borderRadius: 8,
     justifyContent: 'center',
     alignItems: 'center',
@@ -325,18 +332,18 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 15,
     fontWeight: 'bold',
-    color: '#059669',
+    color: colors.accentText,
   },
   clearBtn: {
     paddingHorizontal: 12,
     paddingVertical: 6,
-    backgroundColor: '#fee2e2',
+    backgroundColor: colors.dangerBg,
     borderRadius: 12,
   },
   clearBtnText: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#ef4444',
+    color: colors.dangerText,
   },
   scrollContent: {
     padding: 20,
@@ -348,12 +355,12 @@ const styles = StyleSheet.create({
   pageTitle: {
     fontSize: 22,
     fontWeight: '800',
-    color: '#0f172a',
+    color: colors.textPrimary,
     marginBottom: 4,
   },
   pageSubtitle: {
     fontSize: 13,
-    color: '#64748b',
+    color: colors.textSecondary,
   },
   emptyState: {
     alignItems: 'center',
@@ -363,12 +370,12 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#475569',
+    color: colors.textSecondary,
     marginTop: 16,
   },
   emptySubtext: {
     fontSize: 13,
-    color: '#94a3b8',
+    color: colors.textMuted,
     marginTop: 4,
   },
   timeline: {
@@ -396,7 +403,7 @@ const styles = StyleSheet.create({
     borderRadius: 7,
     marginTop: 6,
     borderWidth: 2,
-    borderColor: '#ffffff',
+    borderColor: colors.card,
   },
   dotRed: {
     backgroundColor: '#ef4444',
@@ -409,16 +416,16 @@ const styles = StyleSheet.create({
   },
   eventCard: {
     flex: 1,
-    backgroundColor: '#ffffff',
+    backgroundColor: colors.card,
     padding: 16,
     borderRadius: 16,
-    shadowColor: '#0f172a',
+    shadowColor: colors.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.04,
     shadowRadius: 8,
     elevation: 2,
     borderWidth: 1,
-    borderColor: '#f1f5f9',
+    borderColor: colors.separator,
   },
   eventHeader: {
     flexDirection: 'row',
@@ -429,12 +436,12 @@ const styles = StyleSheet.create({
   eventTitle: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#0f172a',
+    color: colors.textPrimary,
   },
   eventTime: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#64748b',
+    color: colors.textSecondary,
   },
   metaRow: {
     flexDirection: 'row',
@@ -446,7 +453,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#ecfdf5',
+    backgroundColor: colors.accentBg,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
@@ -454,7 +461,7 @@ const styles = StyleSheet.create({
   metaBadgeText: {
     fontSize: 11,
     fontWeight: '600',
-    color: '#065f46',
+    color: colors.accentText,
   },
   telemetryRow: {
     flexDirection: 'row',
@@ -462,12 +469,12 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    backgroundColor: '#f8fafc',
+    backgroundColor: colors.background,
     borderRadius: 8,
   },
   telemetryText: {
     fontSize: 11,
-    color: '#64748b',
+    color: colors.textSecondary,
   },
   thumbnailContainer: {
     height: 120,
@@ -475,7 +482,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     position: 'relative',
     marginBottom: 8,
-    backgroundColor: '#0f172a',
+    backgroundColor: colors.mediaBackground,
   },
   thumbnailImage: {
     width: '100%',
@@ -494,13 +501,13 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   thumbnailText: {
-    color: '#ffffff',
+    color: colors.onAccent,
     fontSize: 10,
     fontWeight: '600',
   },
   eventDetailsText: {
     fontSize: 12,
-    color: '#475569',
+    color: colors.textSecondary,
     lineHeight: 18,
     marginBottom: 8,
   },
@@ -511,7 +518,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
     paddingTop: 8,
     borderTopWidth: 1,
-    borderTopColor: '#f8fafc',
+    borderTopColor: colors.separator,
   },
   eventDetailsRow: {
     flexDirection: 'row',
@@ -519,7 +526,7 @@ const styles = StyleSheet.create({
   },
   eventDate: {
     fontSize: 11,
-    color: '#94a3b8',
+    color: colors.textMuted,
     marginLeft: 4,
   },
   statusBadge: {
@@ -532,20 +539,20 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   statusNotified: {
-    backgroundColor: '#fef3c7',
+    backgroundColor: colors.warningBg,
   },
   statusNotifiedText: {
     fontSize: 10,
     fontWeight: '700',
-    color: '#92400e',
+    color: colors.warningText,
   },
   statusResponded: {
-    backgroundColor: '#dcfce7',
+    backgroundColor: colors.accentBg,
   },
   statusRespondedText: {
     fontSize: 10,
     fontWeight: '700',
-    color: '#166534',
+    color: colors.accentText,
   },
   modalBg: {
     flex: 1,

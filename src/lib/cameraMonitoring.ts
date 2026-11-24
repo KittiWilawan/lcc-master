@@ -11,13 +11,28 @@ interface CameraMonitorModule {
   setPreviewEnabled(cameraId: string, enabled: boolean): void;
   getPendingEvents(): Promise<string>;
   acknowledgeEvent(id: string): Promise<boolean>;
+  markEventLocallySaved?(id: string): Promise<boolean>;
   configureDelivery(configuration: string): Promise<boolean>;
   getDeliveryRegistration(): Promise<string>;
+  getIdentityGallery?(): Promise<string>;
+  configureIdentityGallery?(configuration: string): Promise<boolean>;
+  clearIdentityGallery?(): Promise<boolean>;
   addListener(name: string): void;
   removeListeners(count: number): void;
 }
 
-export interface NativeCameraSource { id: string; name: string; url: string; familyId: string; userId: string }
+export interface NativeCameraSource { id: string; name: string; url: string; familyId: string; userId: string; targetMemberId?: string; targetMemberIds?: string[] }
+export interface IdentityGalleryStatus { userId?: string; familyId?: string; revision?: string; expiresAt?: number; memberIds?: string[] }
+export function supportsMonitoringIdentity() { return typeof native?.configureIdentityGallery === 'function'; }
+export async function getIdentityGalleryStatus(): Promise<IdentityGalleryStatus> {
+  return native?.getIdentityGallery ? JSON.parse(await native.getIdentityGallery()) : {};
+}
+export async function clearMonitoringIdentity() { await native?.clearIdentityGallery?.(); }
+export async function configureMonitoringIdentity(configuration: { userId: string; familyId: string; revision: string;
+  members: { id: string; name: string; photos: string[] }[] }) {
+  if (!native?.configureIdentityGallery) throw new Error('กรุณาติดตั้ง APK ที่รองรับการจับคู่บุคคล');
+  return native.configureIdentityGallery(JSON.stringify(configuration));
+}
 export interface CameraMonitorState {
   cameraId: string;
   state: 'connecting' | 'reconnecting' | 'ready' | 'ended' | 'ai_error';
@@ -29,11 +44,16 @@ export interface CameraMonitorState {
   lastAnalysisAt?: number;
   inferenceMs?: number;
   hasPendingEvent?: boolean;
+  healthIssues?: string[];
+  pendingEventCount?: number;
+  queueCapacity?: number;
+  queueDiscardedEvents?: number;
+  eventsWithoutEvidence?: number;
 }
 export interface NativeFallEvent {
   id: string; userId: string; familyId: string; cameraId: string; cameraName: string;
-  createdAt: number; imageUri: string; analysis: CameraAnalysis; notificationSent: boolean;
-  cloudSynced?: boolean; remoteAccepted?: boolean; deliveryState?: string; cloudImagePath?: string;
+  createdAt: number; imageUri?: string | null; evidenceState?: string; analysis: CameraAnalysis; notificationSent: boolean;
+  cloudSynced?: boolean; remoteAccepted?: boolean; deliveryComplete?: boolean; deliveryState?: string; cloudImagePath?: string | null;
 }
 
 export interface DeliveryRegistration { deviceId?: string; userId?: string; familyId?: string; expiresAt?: string }
@@ -102,6 +122,15 @@ export function isCameraMonitorReady(state: CameraMonitorState | undefined, now 
 export function requestCameraMonitoringRefresh() { refreshListeners.forEach((listener) => listener()); }
 export function onCameraMonitoringRefresh(listener: () => void) { refreshListeners.add(listener); return () => { refreshListeners.delete(listener); }; }
 export async function configureNativeCameraMonitoring(cameras: NativeCameraSource[]) {
+  if (cameras.some((camera) => camera.targetMemberIds?.length || camera.targetMemberId)) {
+    let selectionPolicy: unknown;
+    try { selectionPolicy = JSON.parse(await requireNative().getCapabilities()).selectionPolicy; } catch { /* Stop unsupported target monitoring below. */ }
+    if (selectionPolicy !== 'verified_targets_only') {
+      await requireNative().configure('[]');
+      clearCameraMonitorStates();
+      throw new Error('กรุณาติดตั้ง APK รุ่นใหม่ก่อนใช้โหมดตรวจเฉพาะคน');
+    }
+  }
   await requireNative().configure(JSON.stringify(cameras));
   if (!cameras.length) { clearCameraMonitorStates(); return; }
   await refreshCameraMonitorStates();
@@ -110,11 +139,13 @@ export async function testNativeCameraSource(url: string): Promise<{ success: bo
   return JSON.parse(await requireNative().testSource(url));
 }
 export async function getNativeCameraCapabilities(): Promise<{ maxCameras: number; frameIntervalMs: number; frameStaleMs: number;
+  recovery?: { desired: boolean; canRestore: boolean; recoveryState: string; userId?: string | null };
   localNotificationsEnabled: boolean; remotePushConfigured: boolean; remoteDeliveryConfigured: boolean }> {
   return JSON.parse(await requireNative().getCapabilities());
 }
 export async function getNativeFallEvents(): Promise<NativeFallEvent[]> { return JSON.parse(await requireNative().getPendingEvents()); }
 export async function acknowledgeNativeFallEvent(id: string) { await requireNative().acknowledgeEvent(id); }
+export async function markNativeFallEventSaved(id: string) { await requireNative().markEventLocallySaved?.(id); }
 
 export function useCameraMonitoringStates() {
   const snapshot = useSyncExternalStore(subscribeCameraMonitoring, getCameraMonitorStates, getCameraMonitorStates);

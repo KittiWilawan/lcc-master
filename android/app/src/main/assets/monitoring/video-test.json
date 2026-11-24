@@ -1,0 +1,6 @@
+{
+  "maxDurationMs": 180000,
+  "maxFileBytes": 262144000,
+  "maxInputPixels": 8294400,
+  "maxProcessingMs": 600000
+}

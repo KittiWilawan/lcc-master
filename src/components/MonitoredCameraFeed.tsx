@@ -5,6 +5,7 @@ import { RealStreamPlayer } from './RealStreamPlayer';
 import { PersonDetectionOverlay } from './PersonDetectionOverlay';
 import { Image } from 'expo-image';
 import { hasNativeCameraMonitoring, isCameraMonitorFresh, isCameraMonitorSlow, useCameraMonitorState } from '../lib/cameraMonitoring';
+import { describeMonitoringHealth } from '../lib/monitoringHealth';
 
 interface CameraSource {
   id: string;
@@ -52,6 +53,7 @@ export function MonitoredCameraFeed({
   const nativeMode = hasNativeCameraMonitoring() && camera.type !== 'device' && monitoring && process.env.EXPO_PUBLIC_AI_MODE !== 'home_worker';
   const nativeState = useCameraMonitorState(camera.id, nativeMode && displayStream);
   const nativeFresh = isCameraMonitorFresh(nativeState);
+  const healthMessages = describeMonitoringHealth(nativeState);
   const analysis = nativeMode ? nativeState?.analysis : cloudAnalysis;
   const [error, setError] = useState<string | null>(null);
   const previousImage = useRef<string | undefined>(undefined);
@@ -126,11 +128,12 @@ export function MonitoredCameraFeed({
   }, [camera.snapshot_url, camera.type, enabled, intervalMs, processImage]);
 
   const nativeStatus = nativeState?.state === 'ai_error' ? 'AI บนอุปกรณ์ตรวจไม่ได้ · ยังไม่พร้อมเฝ้าระวัง' :
-    nativeState?.state === 'reconnecting' ? 'ภาพขาด · กำลังเชื่อมต่อใหม่' :
+    nativeState?.state === 'reconnecting' ? 'ภาพขาดหรือไม่เปลี่ยน · กำลังตรวจการเชื่อมต่อ' :
     nativeState?.state === 'ended' ? 'วิดีโอสิ้นสุด · ไม่มีภาพสดให้ตรวจต่อ' :
     !nativeFresh ? 'กำลังรับภาพและเริ่ม AI · ยังไม่พร้อมเฝ้าระวัง' :
     isCameraMonitorSlow(nativeState) ? 'AI ประมวลผลช้า · อาจพลาดเหตุล้ม ลองลดจำนวนกล้องหรือใช้เครื่องที่เร็วขึ้น' :
-    `AI บนอุปกรณ์ · ${analysis?.status === 'fall' ? 'สงสัยล้ม' : analysis?.status === 'possible_fall' ? 'กำลังยืนยันเหตุ' : analysis?.status === 'normal' ? 'ไม่พบเหตุล้ม' : 'ยังไม่เห็นท่าทางชัดเจน'} · พบ ${analysis?.peopleCount ?? 0} คน`;
+    analysis?.monitoringMode === 'selected_people' && !analysis.monitoredPeopleCount ? analysis.reason :
+    `AI บนอุปกรณ์ · ${analysis?.status === 'fall' ? 'สงสัยล้ม' : analysis?.status === 'possible_fall' ? 'กำลังยืนยันเหตุ' : analysis?.status === 'normal' ? 'ไม่พบเหตุล้ม' : 'ยังไม่เห็นท่าทางชัดเจน'} · พบ ${analysis?.peopleCount ?? 0} คน${analysis?.monitoringMode === 'selected_people' ? ` · อยู่ในขอบเขต ${analysis.monitoredPeopleCount ?? 0} คน` : ''}${analysis?.identityReady === false ? ' · ยังไม่พร้อมระบุชื่อ' : ''}`;
   const status = nativeMode ? nativeStatus : !monitoring ? 'กล้องนี้ไม่ได้อยู่ในขอบเขตการเฝ้าดู' : homeWorkerMode ? (camera.type === 'device'
     ? 'กล้องมือถือไม่อยู่ในระบบเฝ้าระวังคอมบ้าน'
     : 'ดูผลวิเคราะห์จากคอมบ้านในหน้าแจ้งเตือน') :
@@ -147,7 +150,7 @@ export function MonitoredCameraFeed({
       {displayStream && nativeMode ? (
         <View style={{ position: 'absolute', width: frameWidth, height: frameHeight, left: (size.width - frameWidth) / 2, top: (size.height - frameHeight) / 2 }}>
           {nativeState?.previewImage ? <Image source={{ uri: nativeState.previewImage }} style={StyleSheet.absoluteFill} contentFit="fill" cachePolicy="none" /> : null}
-          {nativeFresh && analysis?.detections?.length ? <PersonDetectionOverlay detections={analysis.detections} /> : null}
+          {nativeFresh && analysis && (analysis.detections?.length || analysis.recoveryRegions?.length) ? <PersonDetectionOverlay detections={analysis.detections ?? []} recoveryRegions={analysis.recoveryRegions} /> : null}
         </View>
       ) : displayStream ? (
         <RealStreamPlayer
@@ -165,6 +168,7 @@ export function MonitoredCameraFeed({
       {displayStream ? (
         <View style={[styles.status, analysis?.status === 'fall' && styles.alert]} pointerEvents="none">
           <Text style={styles.statusText}>{nativeMode || analysisEnabled ? status : 'AI กำลังตรวจภาพเบื้องหลัง'}</Text>
+          {nativeMode && healthMessages.map((message) => <Text key={message} style={styles.healthText}>{message}</Text>)}
         </View>
       ) : null}
     </View>
@@ -176,4 +180,5 @@ const styles = StyleSheet.create({
   status: { position: 'absolute', left: 8, top: 8, right: 8, padding: 7, borderRadius: 8, backgroundColor: 'rgba(15, 23, 42, 0.88)' },
   alert: { backgroundColor: 'rgba(185, 28, 28, 0.95)' },
   statusText: { color: '#ffffff', fontSize: 11, fontWeight: '700' },
+  healthText: { color: '#fde68a', fontSize: 13, fontWeight: '700', marginTop: 5 },
 });

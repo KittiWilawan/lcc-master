@@ -1,0 +1,76 @@
+{
+  "modelAsset": "monitoring/video_motion_forest.bin",
+  "featureCount": 162,
+  "joints": [
+    0,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28
+  ],
+  "shoulders": [
+    11,
+    12
+  ],
+  "hips": [
+    23,
+    24
+  ],
+  "add": 0.65,
+  "veto": 0.35,
+  "drop": 0.2,
+  "weightSourceSha256": "1adac82929ab21059f26e52a715b2756a1e3505fc9dc5d77a87ed5aeb4621c87",
+  "corroborationDrop": 0.1,
+  "corroborationFloor": 0.2625,
+  "poseCredit": 0.5,
+  "verification": {
+    "modelAsset": "monitoring/fall_verifier.bin",
+    "mode": "rescue",
+    "threshold": 0.36,
+    "floor": 0.16,
+    "margin": 0.16,
+    "originalThreshold": 0.65,
+    "verifierThreshold": 0.5,
+    "peak": 0.93,
+    "drop": 0.2,
+    "currentPoseFloor": 0.85,
+    "originalPeak": 0.85
+  },
+  "seatedLean": {
+    "tiltCosine": 0.35,
+    "shoulderDrop": 0.65,
+    "hipToShoulder": 0.45,
+    "hipDrop": 0.85,
+    "foldedKnee": -0.15,
+    "minReferences": 4,
+    "originalCeiling": 0.75,
+    "verifierCeiling": 0.58,
+    "uprightCosine": 0.55,
+    "continuationDrop": 0.4
+  },
+  "emptyDiscovery": {
+    "views": [
+      {
+        "fraction": 1,
+        "rotation": 0
+      },
+      {
+        "fraction": 0.63,
+        "rotation": 0
+      },
+      {
+        "fraction": 0.63,
+        "rotation": -90,
+        "nearSideOnly": true
+      }
+    ]
+  }
+}

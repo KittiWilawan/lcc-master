@@ -1,7 +1,7 @@
 {
   "formatVersion": 2,
   "modelAsset": "monitoring/fall_forest.bin",
-  "landmarkerAsset": "monitoring/pose_landmarker_lite.task",
+  "landmarkerAsset": "monitoring/pose_landmarker_full.task",
   "featureVariant": "temporal",
   "framesPerWindow": 3,
   "featureCount": 1242,
@@ -12,5 +12,7 @@
   "sourceSha256": "06f5dde4dbc55a32abec25b0d8319934d09223ae83354f1c458cf2f32495e2ea",
   "exportParityMaxError": 2.220446049250313e-16,
   "validationScope": "Tree export parity only; Android streaming accuracy requires separate validation",
-  "trainingProtocol": "chronological_runtime_windows"
+  "trainingProtocol": "chronological_runtime_windows",
+  "landmarkerSha256": "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1",
+  "landmarkerFamily": "MediaPipe Pose Landmarker Full"
 }

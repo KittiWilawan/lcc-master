@@ -4,18 +4,20 @@ import { AppState, Platform } from 'react-native';
 import type { Session } from '@supabase/supabase-js';
 import { recordFallEvent } from '../lib/fallEvidence';
 import { stopBackgroundMonitoring } from '../lib/backgroundMonitoring';
-import { getTrackedMemberIds, shouldMonitorCamera } from '../lib/monitoringPolicy';
+import { getTrackedMemberIds, getCameraTargetMemberIds, shouldMonitorCamera } from '../lib/monitoringPolicy';
 import { supabase } from '../lib/supabase';
 import { resolveCameraSource } from '../lib/cameraSource';
 import {
-  acknowledgeNativeFallEvent, configureNativeCameraMonitoring, getCameraMonitorStates,
+  acknowledgeNativeFallEvent, markNativeFallEventSaved, clearMonitoringIdentity, configureNativeCameraMonitoring, getCameraMonitorStates,
   getNativeFallEvents, hasNativeCameraMonitoring, onCameraMonitoringRefresh,
   refreshCameraMonitorStates, subscribeCameraMonitoring,
 } from '../lib/cameraMonitoring';
 import { ensureNativeEventDelivery } from '../lib/nativeEventDelivery';
 import network from '../config/network.json';
+import { syncMonitoringIdentity } from '../lib/monitoringIdentity';
+import { reconcileMonitoringOwner } from '../lib/monitoringLifecycle';
 
-export function BackgroundMonitoringController({ session }: { session: Session | null }) {
+export function BackgroundMonitoringController({ session, authenticationUnavailable = false }: { session: Session | null; authenticationUnavailable?: boolean }) {
   const userId = session?.user.id;
   useEffect(() => {
     let active = true;
@@ -27,7 +29,7 @@ export function BackgroundMonitoringController({ session }: { session: Session |
     let controller: AbortController | undefined;
     const nativeMode = Platform.OS === 'android' && hasNativeCameraMonitoring() && process.env.EXPO_PUBLIC_AI_MODE !== 'home_worker';
     if (!userId || !nativeMode) {
-      void stopBackgroundMonitoring().catch(() => false);
+      if (!authenticationUnavailable) void stopBackgroundMonitoring().catch(() => false);
       return () => { active = false; };
     }
 
@@ -40,13 +42,17 @@ export function BackgroundMonitoringController({ session }: { session: Session |
           if (!active || event.userId !== userId || event.familyId !== familyId) continue;
           const record = await recordFallEvent({
             eventId: event.id, familyId: event.familyId,
-            memberName: 'ยังไม่ยืนยันตัวบุคคล', cameraName: event.cameraName,
-            imageUri: event.imageUri, createdAt: new Date(event.createdAt).toISOString(),
+            memberName: event.analysis.fallingMemberName ? `อาจเป็น ${event.analysis.fallingMemberName}` : 'ยังไม่ยืนยันตัวบุคคล', cameraName: event.cameraName,
+            imageUri: event.imageUri ?? undefined, createdAt: new Date(event.createdAt).toISOString(),
             eventType: 'actual', notificationSent: event.notificationSent,
             details: event.analysis.reason,
-            deferCloudSync: true, cloudImagePath: event.cloudSynced ? event.cloudImagePath : undefined,
+            deferCloudSync: true, cloudImagePath: event.cloudSynced ? event.cloudImagePath ?? undefined : undefined,
+            cloudSynced: event.cloudSynced,
           });
-          if (active && record.savedLocally && event.cloudSynced && event.remoteAccepted) await acknowledgeNativeFallEvent(event.id);
+          if (active && record.savedLocally) {
+            await markNativeFallEventSaved(event.id);
+            if (event.cloudSynced && event.deliveryComplete) await acknowledgeNativeFallEvent(event.id);
+          }
         }
       } catch { console.warn('เก็บเหตุจากกล้องไม่สำเร็จ เหตุยังอยู่ในคิวบนอุปกรณ์'); }
       finally { draining = false; }
@@ -60,26 +66,36 @@ export function BackgroundMonitoringController({ session }: { session: Session |
       const requestController = controller;
       const timeout = setTimeout(() => requestController.abort(), network.requestTimeoutMs);
       try {
+        await reconcileMonitoringOwner(userId);
+        if (!active) return;
         const familyId = await AsyncStorage.getItem('familyId');
         if (!active) return;
         if (configuredFamily && familyId !== configuredFamily) {
+          await clearMonitoringIdentity();
           await configureNativeCameraMonitoring([]); configuredFamily = undefined;
         }
         if (!familyId) { await configureNativeCameraMonitoring([]); return; }
         const [{ data: cameras, error }, { data: members, error: memberError }] = await Promise.all([
           supabase.from('cameras').select('id,name,type,url,snapshot_url,assigned_member_id')
             .eq('family_id', familyId).abortSignal(requestController.signal),
-          supabase.from('family_members').select('id,is_tracked').eq('family_id', familyId)
+          supabase.from('family_members').select('id,is_tracked,display_name,identity_consent_at').eq('family_id', familyId)
             .is('user_id', null).abortSignal(requestController.signal),
         ]);
         if (error) throw error;
         if (memberError) throw memberError;
         if (!active || await AsyncStorage.getItem('familyId') !== familyId) return;
         const targets = getTrackedMemberIds(members ?? []);
+        if (targets.size) {
+          try { await syncMonitoringIdentity(userId, familyId, members ?? [], requestController.signal,
+            async () => active && await AsyncStorage.getItem('familyId') === familyId); }
+          catch { console.warn('ยังเตรียมใบหน้าไม่สำเร็จ โหมดเฉพาะคนจะรอจนยืนยันตัวตนได้'); }
+        } else await clearMonitoringIdentity();
+        if (!active || await AsyncStorage.getItem('familyId') !== familyId) return;
         const selected = (cameras ?? []).flatMap((camera) => {
           const url = resolveCameraSource(camera);
           return camera.type !== 'device' && url && shouldMonitorCamera(camera, targets)
-            ? [{ id: camera.id, name: camera.name, url, familyId, userId }] : [];
+            ? [{ id: camera.id, name: camera.name, url, familyId, userId,
+              targetMemberIds: getCameraTargetMemberIds(camera, targets) }] : [];
         });
         await configureNativeCameraMonitoring(selected);
         configuredFamily = familyId;
@@ -113,8 +129,8 @@ export function BackgroundMonitoringController({ session }: { session: Session |
     return () => {
       active = false; controller?.abort(); if (timer) clearTimeout(timer);
       unsubscribe(); unsubscribeRefresh(); appState.remove();
-      void configureNativeCameraMonitoring([]).catch(() => false);
+      // UI unmount/navigation is not a request to stop the independent native service.
     };
-  }, [userId]);
+  }, [userId, authenticationUnavailable]);
   return null;
 }

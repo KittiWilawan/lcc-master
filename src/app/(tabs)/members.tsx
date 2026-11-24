@@ -1,28 +1,34 @@
+import { CareText as Text } from '../../components/CareText';
+import { AppAlert as Alert } from '../../lib/appAlert';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
-import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Alert, Image, KeyboardAvoidingView, Modal, Platform,
-  ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View,
+  ActivityIndicator, Image, KeyboardAvoidingView, Modal, Platform,
+  ScrollView, StyleSheet, Switch, TextInput, TouchableOpacity, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../context/ThemeContext';
 import {
   addCareRecipient, FamilyMember, listFamilyMembers, removeCareRecipient,
-  setCareRecipientTracking, updateCareRecipient, uploadCareRecipientAvatar,
+  setCareRecipientTracking, updateCareRecipient, uploadCareRecipientAvatar, clearCareRecipientSelection,
 } from '../../lib/familyMembers';
 import { getFriendlyErrorMessage } from '../../lib/friendlyError';
 import { supabase } from '../../lib/supabase';
+import { SetupReturnButton } from '../../components/SetupReturnButton';
+import readability from '../../config/readability.json';
+import { requestCameraMonitoringRefresh } from '../../lib/cameraMonitoring';
 
 const forest = '#17473D';
 const emerald = '#168765';
 
 export default function MembersScreen() {
   const router = useRouter();
+  const { setup } = useLocalSearchParams<{ setup?: string }>();
   const insets = useSafeAreaInsets();
-  const { colors, isDarkMode } = useTheme();
+  const { colors, isDarkMode, seniorMode } = useTheme();
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [familyId, setFamilyId] = useState<string | null>(null);
   const [isOwner, setIsOwner] = useState(false);
@@ -34,6 +40,8 @@ export default function MembersScreen() {
   const [relationship, setRelationship] = useState('');
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [trackingBusy, setTrackingBusy] = useState(false);
+  const trackingInFlight = useRef(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -79,8 +87,8 @@ export default function MembersScreen() {
 
   const save = async () => {
     const cleanName = name.trim();
-    if (!cleanName) { Alert.alert('กรุณาใส่ชื่อ', 'ชื่อช่วยให้ผู้ดูแลทราบว่าเหตุการณ์เกิดกับใคร'); return; }
-    if (!familyId || !isOwner) { Alert.alert('ไม่มีสิทธิ์เพิ่มข้อมูล', 'ให้ผู้สร้างครอบครัวเพิ่มผู้ที่ต้องการดูแล'); return; }
+    if (!cleanName) { Alert.error('กรุณาใส่ชื่อ', 'ชื่อช่วยให้ผู้ดูแลทราบว่าเหตุการณ์เกิดกับใคร'); return; }
+    if (!familyId || !isOwner) { Alert.error('ไม่มีสิทธิ์เพิ่มข้อมูล', 'ให้ผู้สร้างครอบครัวเพิ่มผู้ที่ต้องการดูแล'); return; }
     setSaving(true);
     try {
       const memberId = editing?.id ?? await addCareRecipient(familyId, cleanName, relationship.trim());
@@ -93,33 +101,65 @@ export default function MembersScreen() {
         }
       }
       setShowForm(false);
+      requestCameraMonitoringRefresh();
       await refresh();
+      if (!editing) Alert.confirm('เพิ่มคนที่เฝ้าดูแล้ว', 'ขั้นตอนถัดไปคือสแกนใบหน้า เพื่อให้ AI ยืนยันได้ว่าเป็นคนนี้ รูปโปรไฟล์อย่างเดียวใช้ยืนยันไม่ได้', [
+        { text: 'ทำภายหลัง', style: 'cancel' },
+        { text: 'สแกนใบหน้าต่อ', onPress: () => router.push({ pathname: '/identity-enrollment', params: { memberId, memberName: cleanName, setup } }) },
+      ]);
     } catch (error) {
-      Alert.alert('บันทึกไม่สำเร็จ', getFriendlyErrorMessage(error));
+      Alert.error('บันทึกไม่สำเร็จ', getFriendlyErrorMessage(error));
     } finally { setSaving(false); }
   };
 
   const toggleTracking = async (member: FamilyMember) => {
+    if (!isOwner || trackingInFlight.current) return;
     const next = !member.is_tracked;
+    if (!next && trackedCount === 1) {
+      Alert.confirm('เปลี่ยนเป็นตรวจทุกคนในภาพ?', 'เมื่อไม่เลือกใคร ระบบจะตรวจทุกคนที่มองเห็น และจะไม่ระบุชื่อบุคคล', [
+        { text: 'คงคนที่เลือกไว้', style: 'cancel' }, { text: 'ตรวจทุกคน', onPress: () => void changeTracking(member, next) },
+      ]);
+      return;
+    }
+    await changeTracking(member, next);
+  };
+  const changeTracking = async (member: FamilyMember, enabled: boolean) => {
+    if (!isOwner || trackingInFlight.current) return;
+    trackingInFlight.current = true; setTrackingBusy(true);
+    const next = enabled;
     setMembers((current) => current.map((item) => item.id === member.id ? { ...item, is_tracked: next } : item));
-    try { await setCareRecipientTracking(member.id, next); }
+    try { await setCareRecipientTracking(member.id, next); requestCameraMonitoringRefresh(); }
     catch (error) {
       setMembers((current) => current.map((item) => item.id === member.id ? { ...item, is_tracked: member.is_tracked } : item));
-      Alert.alert('เปลี่ยนสถานะไม่สำเร็จ', getFriendlyErrorMessage(error));
-    }
+      Alert.error('เปลี่ยนสถานะไม่สำเร็จ', getFriendlyErrorMessage(error));
+    } finally { trackingInFlight.current = false; setTrackingBusy(false); }
+  };
+  const chooseAllPeople = () => {
+    if (!isOwner || trackingInFlight.current || !trackedCount || !familyId) return;
+    Alert.confirm('ตรวจทุกคนในภาพ?', 'พักการเลือกบุคคลทั้งหมดในครอบครัวนี้ โดยเก็บชื่อและรูปไว้ สามารถเลือกกลับได้ภายหลัง', [
+      { text: 'ยกเลิก', style: 'cancel' }, { text: 'ตรวจทุกคน', onPress: async () => {
+        if (trackingInFlight.current) return;
+        trackingInFlight.current = true; setTrackingBusy(true);
+        try { await clearCareRecipientSelection(familyId); requestCameraMonitoringRefresh(); await refresh(); }
+        catch (error) { Alert.error('เปลี่ยนโหมดไม่สำเร็จ', getFriendlyErrorMessage(error)); }
+        finally { trackingInFlight.current = false; setTrackingBusy(false); }
+      } },
+    ]);
   };
 
-  const confirmRemove = (member: FamilyMember) => Alert.alert(
-    'ลบผู้รับการดูแล?', `ลบ ${member.display_name} ออกจากครอบครัว? กล้องที่เคยผูกไว้จะไม่มีชื่อผู้รับการดูแล`, [
+  const confirmRemove = (member: FamilyMember) => Alert.confirm(
+    'ลบผู้รับการดูแล?', member.is_tracked && trackedCount === 1
+      ? `ลบ ${member.display_name}? คนนี้เป็นคนสุดท้ายที่เลือกไว้ หลังลบระบบจะเปลี่ยนเป็นตรวจทุกคนในภาพ`
+      : `ลบ ${member.display_name} ออกจากครอบครัว? กล้องที่เคยผูกไว้จะไม่มีชื่อผู้รับการดูแล`, [
       { text: 'ยกเลิก', style: 'cancel' },
       { text: 'ลบ', style: 'destructive', onPress: async () => {
-        try { await removeCareRecipient(member.id); await refresh(); }
-        catch (error) { Alert.alert('ลบไม่สำเร็จ', getFriendlyErrorMessage(error)); }
+        try { await removeCareRecipient(member.id); requestCameraMonitoringRefresh(); await refresh(); }
+        catch (error) { Alert.error('ลบไม่สำเร็จ', getFriendlyErrorMessage(error)); }
       } },
     ],
   );
 
-  const leaveFamily = () => Alert.alert('ออกจากครอบครัว?', 'คุณจะไม่ได้รับข้อมูลและการแจ้งเตือนของครอบครัวนี้', [
+  const leaveFamily = () => Alert.confirm('ออกจากครอบครัว?', 'คุณจะไม่ได้รับข้อมูลและการแจ้งเตือนของครอบครัวนี้', [
     { text: 'ยกเลิก', style: 'cancel' },
     { text: 'ออกจากครอบครัว', style: 'destructive', onPress: async () => {
       try {
@@ -131,7 +171,7 @@ export default function MembersScreen() {
         await AsyncStorage.multiRemove(['familyId', 'familyCode']);
         router.replace('/family-setup');
       } catch (error) {
-        Alert.alert('ออกจากครอบครัวไม่สำเร็จ', getFriendlyErrorMessage(error));
+        Alert.error('ออกจากครอบครัวไม่สำเร็จ', getFriendlyErrorMessage(error));
       }
     } },
   ]);
@@ -144,8 +184,8 @@ export default function MembersScreen() {
             : <MaterialCommunityIcons name="account-heart-outline" size={30} color={colors.accentText} />}
         </View>
         <View style={styles.personDetails}>
-          <Text style={[styles.personName, { color: colors.textPrimary }]} numberOfLines={1}>{member.display_name}</Text>
-          <Text style={[styles.personRelation, { color: colors.textSecondary }]} numberOfLines={1}>
+          <Text style={[styles.personName, { color: colors.textPrimary }]}>{member.display_name}</Text>
+          <Text style={[styles.personRelation, { color: colors.textSecondary }]}>
             {member.role || 'ผู้รับการดูแล'} · ไม่ต้องมีบัญชีหรือมือถือ
           </Text>
         </View>
@@ -157,19 +197,19 @@ export default function MembersScreen() {
         </View>
       </View>
       <View style={[styles.cardDivider, { backgroundColor: colors.separator }]} />
-      <View style={styles.identityRow}>
-        <View style={[styles.identityIcon, { backgroundColor: member.identity_reference_count === 4 ? '#DCFCE7' : colors.inputBg }]}>
-          <MaterialCommunityIcons name="account-search-outline" size={20} color={member.identity_reference_count === 4 ? emerald : colors.textMuted} />
+      <View style={[styles.identityRow, seniorMode && { flexWrap: 'wrap' }]}>
+        <View style={[styles.identityIcon, { backgroundColor: colors.inputBg }]}>
+          <MaterialCommunityIcons name="account-search-outline" size={20} color={colors.textMuted} />
         </View>
-        <View style={styles.identityCopy}>
-          <Text style={[styles.identityTitle, { color: colors.textPrimary }]}>ยืนยันคนในห้องที่มีหลายคน</Text>
+        <View style={[styles.identityCopy, seniorMode && { minWidth: 140 }]}>
+          <Text style={[styles.identityTitle, { color: colors.textPrimary }]}>รูปใบหน้าสำหรับยืนยันบุคคล</Text>
           <Text style={[styles.identityHint, { color: colors.textSecondary }]}>
-            {member.identity_reference_count === 4 ? 'สแกนบุคคลครบ 4 มุม' : `สแกนแล้ว ${member.identity_reference_count}/4 มุม`}
+            {`มีรูปอ้างอิง ${member.identity_reference_count} รูป · ตรวจความพร้อมจับคู่ในหน้าตั้งค่า`}
           </Text>
         </View>
-        {isOwner && <TouchableOpacity style={[styles.identityButton, { borderColor: colors.cardBorder }]} onPress={() => router.push({
+        {isOwner && <TouchableOpacity style={[styles.identityButton, seniorMode && { width: '100%', alignItems: 'center' }, { borderColor: colors.cardBorder }]} onPress={() => router.push({
           pathname: '/identity-enrollment',
-          params: { memberId: member.id, memberName: member.display_name },
+          params: { memberId: member.id, memberName: member.display_name, setup },
         })}>
           <Text style={styles.identityButtonText}>{member.identity_reference_count ? 'จัดการ' : 'ตั้งค่า'}</Text>
         </TouchableOpacity>}
@@ -177,11 +217,12 @@ export default function MembersScreen() {
       <View style={[styles.cardDivider, { backgroundColor: colors.separator }]} />
       <View style={styles.cardFooter}>
         <View style={styles.toggleCopy}>
-          <Text style={[styles.toggleTitle, { color: colors.textPrimary }]}>รวมในการเฝ้าดู</Text>
-          <Text style={[styles.toggleHint, { color: colors.textSecondary }]}>ต้องผูกกล้องและเปิดระบบ AI เพิ่ม</Text>
+          <Text style={[styles.toggleTitle, { color: colors.textPrimary }]}>เฝ้าดูคนนี้</Text>
+          <Text style={[styles.toggleHint, { color: colors.textSecondary }]}>แจ้งเหตุเมื่อยืนยันใบหน้าได้ · ต้องเชื่อมกล้องด้วย</Text>
         </View>
-        <Switch value={member.is_tracked} onValueChange={() => void toggleTracking(member)} disabled={!isOwner}
-          trackColor={{ false: colors.cardBorder, true: '#91D7BC' }} thumbColor={member.is_tracked ? emerald : '#CBD5D1'} />
+        <View style={{ minHeight: readability.touchTargetSize, justifyContent: 'center', paddingHorizontal: 4 }}><Switch value={member.is_tracked}
+          accessibilityLabel={`เฝ้าดู ${member.display_name}`} onValueChange={() => void toggleTracking(member)} disabled={!isOwner || trackingBusy}
+          trackColor={{ false: colors.cardBorder, true: '#91D7BC' }} thumbColor={member.is_tracked ? emerald : '#CBD5D1'} /></View>
       </View>
       {isOwner && <View style={styles.actions}>
         <TouchableOpacity style={[styles.actionButton, { borderColor: colors.cardBorder }]} onPress={() => openForm(member)}>
@@ -205,10 +246,22 @@ export default function MembersScreen() {
       </TouchableOpacity>
     </View>
     <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-      <View style={styles.hero}>
+      {setup === 'true' && <SetupReturnButton />}
+      <View style={[styles.noticeCard, { backgroundColor: colors.accentBg }]}>
+        <Text style={{ color: colors.textPrimary, fontWeight: '800' }}>ตั้งค่าให้เฝ้าดูใคร</Text>
+        <Text style={{ color: colors.textSecondary, marginTop: 6 }}>{trackedCount
+          ? `เฉพาะคนที่เปิดไว้ ${trackedCount} คน · ถ้ายืนยันใบหน้าไม่ได้ จะไม่แจ้งเหตุจากคนนั้น`
+          : 'ทุกคนในภาพ · ไม่ต้องสแกนใบหน้า และไม่ระบุชื่อ'}</Text>
+        {isOwner && trackedCount > 0 && <TouchableOpacity onPress={chooseAllPeople} disabled={trackingBusy} accessibilityRole="button"
+          style={{ minHeight: readability.touchTargetSize, justifyContent: 'center' }}>
+          <Text style={{ color: colors.accentText, fontWeight: '800' }}>เปลี่ยนเป็นตรวจทุกคนในภาพ</Text>
+        </TouchableOpacity>}
+        {!isOwner && <Text style={{ color: colors.textSecondary }}>เจ้าของครอบครัวเป็นผู้เปลี่ยนคนที่เฝ้าดู</Text>}
+      </View>
+      {!seniorMode && <View style={styles.hero}>
         <View style={styles.heroIcon}><MaterialCommunityIcons name="home-heart" size={28} color="#FFFFFF" /></View>
         <Text style={styles.heroTitle}>ดูแลได้ แม้ท่านไม่มีมือถือ</Text>
-        <Text style={styles.heroBody}>เพิ่มชื่อผู้สูงอายุไว้ในครอบครัว แล้วผูกกล้องกับท่าน ผู้ดูแลที่มีบัญชีจะเป็นคนรับแจ้งเตือน</Text>
+        <Text style={styles.heroBody}>เพิ่มชื่อ สแกนใบหน้า แล้วเปิด “เฝ้าดูคนนี้” ผู้ดูแลที่มีบัญชีจะเป็นคนรับแจ้งเตือน</Text>
         <View style={styles.heroStats}>
           <View><Text style={styles.statNumber}>{recipients.length}</Text><Text style={styles.statLabel}>ผู้รับการดูแล</Text></View>
           <View style={styles.statSeparator} />
@@ -216,7 +269,7 @@ export default function MembersScreen() {
           <View style={styles.statSeparator} />
           <View><Text style={styles.statNumber}>{caregivers.length}</Text><Text style={styles.statLabel}>ผู้ดูแล</Text></View>
         </View>
-      </View>
+      </View>}
       {trackedCount === 0 && (
         <View style={[styles.noticeCard, { backgroundColor: colors.accentBg, borderColor: colors.cardBorder, borderWidth: 1 }]}>
           <Text style={{ color: colors.accentText, fontSize: 14, fontWeight: '800' }}>AI กำลังใช้โหมดตรวจทุกคน</Text>
@@ -226,7 +279,7 @@ export default function MembersScreen() {
         </View>
       )}
       <View style={styles.sectionHeading}>
-        <View><Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>ผู้รับการดูแล</Text>
+        <View style={{ flex: 1, minWidth: 0 }}><Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>ผู้รับการดูแล</Text>
           <Text style={[styles.sectionSubtitle, { color: colors.textSecondary }]}>เพิ่มได้ด้วยชื่ออย่างเดียว</Text></View>
         {isOwner && <TouchableOpacity style={styles.addButton} onPress={() => openForm()} accessibilityLabel="เพิ่มผู้รับการดูแล">
           <MaterialCommunityIcons name="plus" size={20} color="#FFFFFF" /><Text style={styles.addButtonText}>เพิ่มคน</Text>
@@ -249,7 +302,7 @@ export default function MembersScreen() {
             {isOwner && <TouchableOpacity style={styles.emptyAction} onPress={() => openForm()}><Text style={styles.emptyActionText}>เพิ่มคนแรก</Text></TouchableOpacity>}
           </View>}
       <View style={styles.sectionHeading}>
-        <View><Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>ผู้ดูแลที่มีบัญชี</Text>
+        <View style={{ flex: 1, minWidth: 0 }}><Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>ผู้ดูแลที่มีบัญชี</Text>
           <Text style={[styles.sectionSubtitle, { color: colors.textSecondary }]}>เปิดรับแจ้งเตือนในโปรไฟล์ของแต่ละคนได้</Text></View>
       </View>
       <View style={[styles.caregiverCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
@@ -269,7 +322,7 @@ export default function MembersScreen() {
       </TouchableOpacity>}
     </ScrollView>
     <Modal visible={showForm} transparent animationType="slide" onRequestClose={() => setShowForm(false)}>
-      <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <View style={[styles.formSheet, { backgroundColor: colors.card, paddingBottom: Math.max(insets.bottom, 24) }]}>
           <View style={styles.sheetHandle} />
           <View style={styles.sheetHeader}>
@@ -305,7 +358,7 @@ const styles = StyleSheet.create({
   topBar: { paddingHorizontal: 22, paddingBottom: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1 },
   overline: { fontSize: 11, fontWeight: '800', letterSpacing: 1.8, marginBottom: 3 },
   topTitle: { fontSize: 25, fontWeight: '800' },
-  topIcon: { width: 43, height: 43, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  topIcon: { width: readability.touchTargetSize, height: readability.touchTargetSize, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
   content: { padding: 20, paddingBottom: 42 },
   hero: { backgroundColor: forest, borderRadius: 25, padding: 22, marginBottom: 29 },
   heroIcon: { width: 49, height: 49, borderRadius: 17, backgroundColor: '#2E6758', alignItems: 'center', justifyContent: 'center', marginBottom: 19 },
@@ -324,10 +377,10 @@ const styles = StyleSheet.create({
   noticeCard: { borderRadius: 18, padding: 22, gap: 12, marginBottom: 22 },
   retryText: { color: emerald, fontWeight: '800', marginTop: 10 },
   personCard: { borderWidth: 1, borderRadius: 20, padding: 16, marginBottom: 12 },
-  personRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  personRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 12 },
   avatar: { width: 54, height: 54, borderRadius: 19, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   avatarImage: { width: 54, height: 54 },
-  personDetails: { flex: 1, minWidth: 0 },
+  personDetails: { flex: 1, minWidth: 120 },
   personName: { fontSize: 16, fontWeight: '800' },
   personRelation: { fontSize: 11, marginTop: 4 },
   statePill: { flexDirection: 'row', gap: 5, alignItems: 'center', borderRadius: 20, paddingHorizontal: 8, paddingVertical: 6 },
@@ -338,14 +391,14 @@ const styles = StyleSheet.create({
   identityCopy: { flex: 1 },
   identityTitle: { fontSize: 12, fontWeight: '800' },
   identityHint: { fontSize: 11, marginTop: 3 },
-  identityButton: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 11, paddingVertical: 7 },
+  identityButton: { minHeight: readability.touchTargetSize, justifyContent: 'center', borderWidth: 1, borderRadius: 10, paddingHorizontal: 11, paddingVertical: 7 },
   identityButtonText: { color: emerald, fontSize: 12, fontWeight: '800' },
   cardFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   toggleCopy: { flex: 1 },
   toggleTitle: { fontSize: 13, fontWeight: '700' },
   toggleHint: { fontSize: 11, marginTop: 3 },
   actions: { flexDirection: 'row', gap: 8, marginTop: 14 },
-  actionButton: { flex: 1, borderWidth: 1, borderRadius: 11, paddingVertical: 9, flexDirection: 'row', gap: 6, alignItems: 'center', justifyContent: 'center' },
+  actionButton: { flex: 1, minHeight: readability.touchTargetSize, borderWidth: 1, borderRadius: 11, paddingVertical: 9, flexDirection: 'row', gap: 6, alignItems: 'center', justifyContent: 'center' },
   removeButton: { backgroundColor: '#FCECEC', borderColor: '#F7D5D5' },
   emptyCard: { borderWidth: 1, borderRadius: 20, alignItems: 'center', padding: 25, marginBottom: 24 },
   emptyIcon: { width: 66, height: 66, borderRadius: 22, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
@@ -373,6 +426,6 @@ const styles = StyleSheet.create({
   fieldLabel: { fontSize: 13, fontWeight: '700', marginBottom: 8 },
   input: { borderWidth: 1, borderRadius: 13, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, marginBottom: 18 },
   formHint: { fontSize: 12, lineHeight: 19, marginTop: 1 },
-  saveButton: { backgroundColor: emerald, borderRadius: 14, height: 51, alignItems: 'center', justifyContent: 'center', marginTop: 23, marginBottom: 9 },
+  saveButton: { backgroundColor: emerald, borderRadius: 14, minHeight: readability.seniorTouchTargetSize, paddingVertical: 12, alignItems: 'center', justifyContent: 'center', marginTop: 23, marginBottom: 9 },
   saveButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
 });

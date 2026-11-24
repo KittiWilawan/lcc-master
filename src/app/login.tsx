@@ -1,23 +1,27 @@
+import { CareText as Text } from '../components/CareText';
 import { FontAwesome5, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
+  KeyboardAvoidingView,
+  Platform,
   SafeAreaView,
   ScrollView,
   StyleSheet,
-  Text,
   TextInput,
   TouchableOpacity,
   View
 } from 'react-native';
+import { AppAlert as Alert } from '../lib/appAlert';
+import { validateEmail } from '../lib/formValidation';
 import { supabase, checkAndSaveUserFamily } from '../lib/supabase';
 import { getAuthErrorMessage, getFriendlyErrorMessage } from '../lib/friendlyError';
 
 export default function LoginScreen() {
   const router = useRouter();
+  const { setup } = useLocalSearchParams<{ setup?: string }>();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -27,22 +31,24 @@ export default function LoginScreen() {
   const handleLogin = async () => {
     if (submitting.current) return;
     if (!email.trim() || !password) {
-      Alert.alert(
+      Alert.error(
         'ข้อมูลไม่ครบถ้วน', 
         'กรุณากรอก "อีเมล" และ "รหัสผ่าน" ให้ครบถ้วนเพื่อเข้าสู่ระบบครับ'
       );
       return;
     }
 
+    const validated = validateEmail(email);
+    if (validated.error) { Alert.error('อีเมลไม่ถูกต้อง', validated.error); return; }
     submitting.current = true;
     setLoading(true);
     try {
       const { data: loginData, error } = await supabase.auth.signInWithPassword({
-        email: email.trim().toLowerCase(),
+        email: validated.email,
         password,
       });
       if (error) {
-        Alert.alert('เข้าสู่ระบบไม่สำเร็จ', getAuthErrorMessage(error));
+        Alert.error('เข้าสู่ระบบไม่สำเร็จ', getAuthErrorMessage(error));
         return;
       }
       const userId = loginData?.session?.user?.id;
@@ -53,27 +59,27 @@ export default function LoginScreen() {
           const familyInfo = await checkAndSaveUserFamily(userId);
           hasFamily = Boolean(familyInfo?.familyId);
         } catch (familyError) {
-          Alert.alert('เข้าสู่ระบบแล้ว แต่โหลดครอบครัวไม่สำเร็จ', getFriendlyErrorMessage(familyError));
-          router.replace('/(tabs)/home');
+          Alert.error('เข้าสู่ระบบแล้ว แต่โหลดครอบครัวไม่สำเร็จ', getFriendlyErrorMessage(familyError));
+          router.replace(setup === 'true' ? '/setup-guide' : '/(tabs)/home');
           return;
         }
       }
 
       if (hasFamily) {
-        Alert.alert(
+        Alert.success(
           'ยินดีต้อนรับกลับ!', 
           'เข้าสู่ระบบเรียบร้อยแล้ว กำลังพาท่านเข้าสู่หน้าหลัก...'
         );
-        router.replace('/(tabs)/home');
+        router.replace(setup === 'true' ? '/setup-guide' : '/(tabs)/home');
       } else {
-        Alert.alert(
+        Alert.success(
           'เข้าสู่ระบบสำเร็จ', 
           'กรุณาตั้งค่าหรือเข้าร่วมครอบครัวเพื่อเริ่มใช้งาน...'
         );
-        router.replace('/family-setup');
+        router.replace(setup === 'true' ? '/setup-guide' : '/family-setup');
       }
     } catch (error: unknown) {
-      Alert.alert('เข้าสู่ระบบไม่สำเร็จ', getAuthErrorMessage(error));
+      Alert.error('เข้าสู่ระบบไม่สำเร็จ', getAuthErrorMessage(error));
     } finally {
       setLoading(false);
       submitting.current = false;
@@ -82,8 +88,9 @@ export default function LoginScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       {/* ใช้ ScrollView เพื่อให้หน้าจอไม่ล้นเวลาคีย์บอร์ดเด้งขึ้นมา */}
-      <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
 
         {/* =========================================================
             1. TOP NAVBAR
@@ -189,7 +196,7 @@ export default function LoginScreen() {
           {/* ปุ่มลงทะเบียนใหม่ */}
           <View style={styles.registerGroup}>
             <Text style={styles.registerHint}>ยังไม่มีบัญชีใช่ไหม?</Text>
-            <TouchableOpacity style={styles.registerBtn} onPress={() => router.push('/register')}>
+            <TouchableOpacity style={styles.registerBtn} onPress={() => router.push({ pathname: '/register', params: { setup } })}>
               <Text style={styles.registerBtnText}>ลงทะเบียนใหม่</Text>
             </TouchableOpacity>
           </View>
@@ -233,6 +240,7 @@ export default function LoginScreen() {
         </View>
 
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

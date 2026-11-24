@@ -13,7 +13,9 @@ def main():
     parser.add_argument("--segment-seconds", type=float, required=True)
     parser.add_argument("--frame-rate", type=int, required=True)
     parser.add_argument("--max-dimension", type=int, required=True)
+    parser.add_argument("--threads", type=int, default=1)
     args = parser.parse_args()
+    if args.threads <= 0: raise ValueError("Positive encoder thread count required")
     cases = json.loads(args.suite.read_text(encoding="utf-8"))["cases"]
     manifest = []
     for case in cases:
@@ -24,7 +26,7 @@ def main():
         subprocess.run([
             args.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", case["sourceVideo"],
             "-an", "-vf", f"scale={args.max_dimension}:{args.max_dimension}:force_original_aspect_ratio=decrease",
-            "-r", str(args.frame_rate), "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+            "-r", str(args.frame_rate), "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-threads", str(args.threads),
             "-g", str(round(args.frame_rate * args.segment_seconds)), "-sc_threshold", "0",
             "-f", "hls", "-hls_time", str(args.segment_seconds), "-hls_playlist_type", "vod",
             "-hls_segment_filename", str(directory / "segment-%03d.ts"), str(playlist),

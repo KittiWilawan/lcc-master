@@ -27,7 +27,6 @@ class MonitorCredentialStore(context: Context) {
     }.generateKey()
   }
   fun read(): JSONObject? = synchronized(guard) {
-    if (!file.baseFile.exists()) return@synchronized null
     try {
       val envelope = JSONObject(file.openRead().bufferedReader().use { it.readText() })
       val cipher = Cipher.getInstance("AES/GCM/NoPadding")

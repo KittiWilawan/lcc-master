@@ -10,6 +10,8 @@ import { clearDeprecatedIntegrationStorage, clearSignedInUserStorage, getCurrent
 import { applyAuthCallbackUrl } from "../lib/authCallback";
 import { supabase } from "../lib/supabase";
 import { BackgroundMonitoringController } from "../components/BackgroundMonitoringController";
+import { AppAlertProvider } from "../components/AppAlertProvider";
+import { NotificationReceiptController } from "../components/NotificationReceiptController";
 
 // Prevent auto hide until initial checks are completed
 void SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -20,6 +22,7 @@ export default function RootLayout() {
   const [checkingLock, setCheckingLock] = useState(true);
   const [session, setSession] = useState<Session | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
+  const [authenticationUnavailable, setAuthenticationUnavailable] = useState(false);
 
   const checkAppLock = useCallback(async () => {
     try {
@@ -45,16 +48,17 @@ export default function RootLayout() {
   useEffect(() => {
     let active = true;
     void getCurrentSession().then((currentSession) => {
-      if (active) setSession(currentSession);
+      if (active) { setSession(currentSession); setAuthenticationUnavailable(false); }
     }).catch((error) => {
       console.log('Session bootstrap error:', error);
-      if (active) setSession(null);
+      if (active) { setSession(null); setAuthenticationUnavailable(true); }
     }).finally(() => {
       if (active) setCheckingSession(false);
     });
 
     const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession);
+      setAuthenticationUnavailable(false);
       setCheckingSession(false);
       if (event === 'SIGNED_OUT') {
         void clearSignedInUserStorage().finally(() => router.replace('/login'));
@@ -92,15 +96,20 @@ export default function RootLayout() {
   if (isLocked) {
     return (
       <ThemeProvider>
-        <BackgroundMonitoringController session={session} />
+        <AppAlertProvider>
+        <BackgroundMonitoringController session={session} authenticationUnavailable={authenticationUnavailable} />
+        <NotificationReceiptController session={session} />
         <AppLockScreen onUnlock={() => setIsLocked(false)} />
+        </AppAlertProvider>
       </ThemeProvider>
     );
   }
 
   return (
     <ThemeProvider>
-      <BackgroundMonitoringController session={session} />
+      <AppAlertProvider>
+      <BackgroundMonitoringController session={session} authenticationUnavailable={authenticationUnavailable} />
+        <NotificationReceiptController session={session} />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="index" />
         <Stack.Screen name="reset-password" />
@@ -118,8 +127,10 @@ export default function RootLayout() {
           <Stack.Screen name="all-cameras" />
           <Stack.Screen name="identity-enrollment" />
           <Stack.Screen name="setup-guide" />
+          <Stack.Screen name="video-test" />
         </Stack.Protected>
       </Stack>
+      </AppAlertProvider>
     </ThemeProvider>
   );
 }

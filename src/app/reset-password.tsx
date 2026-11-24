@@ -1,9 +1,9 @@
+import { AppAlert as Alert } from '../lib/appAlert';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Image,
   SafeAreaView,
   ScrollView,
@@ -30,7 +30,7 @@ export default function ResetPasswordScreen() {
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) {
-        Alert.alert('ข้อผิดพลาด', 'ไม่พบสิทธิ์การรีเซ็ตรหัสผ่าน กรุณากดลิงก์จากอีเมลใหม่อีกครั้ง', [
+        Alert.error('ข้อผิดพลาด', 'ไม่พบสิทธิ์การรีเซ็ตรหัสผ่าน กรุณากดลิงก์จากอีเมลใหม่อีกครั้ง', [
           { text: 'ตกลง', onPress: () => router.replace('/login') }
         ]);
       }
@@ -39,15 +39,15 @@ export default function ResetPasswordScreen() {
 
   const handleUpdatePassword = async () => {
     if (!password || !confirmPassword) {
-      Alert.alert('ข้อมูลไม่ครบถ้วน', 'กรุณากรอกรหัสผ่านใหม่ให้ครบทั้งสองช่อง');
+      Alert.error('ข้อมูลไม่ครบถ้วน', 'กรุณากรอกรหัสผ่านใหม่ให้ครบทั้งสองช่อง');
       return;
     }
     if (password !== confirmPassword) {
-      Alert.alert('รหัสผ่านไม่ตรงกัน', 'รหัสผ่านใหม่และการยืนยันรหัสผ่านไม่ตรงกัน');
+      Alert.error('รหัสผ่านไม่ตรงกัน', 'รหัสผ่านใหม่และการยืนยันรหัสผ่านไม่ตรงกัน');
       return;
     }
     if (password.length < 8) {
-      Alert.alert('รหัสผ่านสั้นเกินไป', 'รหัสผ่านต้องมีความยาวอย่างน้อย 8 ตัวอักษร');
+      Alert.error('รหัสผ่านสั้นเกินไป', 'รหัสผ่านต้องมีความยาวอย่างน้อย 8 ตัวอักษร');
       return;
     }
 
@@ -58,9 +58,9 @@ export default function ResetPasswordScreen() {
     setLoading(false);
 
     if (error) {
-      Alert.alert('เปลี่ยนรหัสผ่านไม่สำเร็จ', getAuthErrorMessage(error));
+      Alert.error('เปลี่ยนรหัสผ่านไม่สำเร็จ', getAuthErrorMessage(error));
     } else {
-      Alert.alert(
+      Alert.success(
         'เปลี่ยนรหัสผ่านสำเร็จ! 🎉',
         'รหัสผ่านของคุณถูกเปลี่ยนเรียบร้อยแล้ว กรุณาเข้าสู่ระบบด้วยรหัสผ่านใหม่',
         [{
@@ -79,7 +79,7 @@ export default function ResetPasswordScreen() {
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView 
         style={{ flex: 1 }} 
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
 

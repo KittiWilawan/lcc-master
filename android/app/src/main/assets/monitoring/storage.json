@@ -1,0 +1,7 @@
+{
+  "appBatchSize": 64,
+  "deliveryBatchSize": 8,
+  "maxEvidenceBytes": 134217728,
+  "minimumFreeBytes": 67108864,
+  "maxEventImageBytes": 1048576
+}

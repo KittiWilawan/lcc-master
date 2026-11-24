@@ -52,6 +52,13 @@ export async function setCareRecipientTracking(memberId: string, enabled: boolea
   if (error) throw error;
 }
 
+export async function clearCareRecipientSelection(familyId: string) {
+  if (!familyId.trim()) throw new Error('ไม่พบครอบครัว');
+  const { error } = await supabase.from('family_members').update({ is_tracked: false })
+    .eq('family_id', familyId).is('user_id', null).eq('is_tracked', true);
+  if (error) throw error;
+}
+
 export async function removeCareRecipient(memberId: string) {
   const { error } = await supabase.from('family_members')
     .delete().eq('id', memberId).is('user_id', null);

@@ -3,12 +3,13 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { View, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../context/ThemeContext';
+import readability from '../../config/readability.json';
 
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
   const { colors, isDarkMode, seniorMode } = useTheme();
   const bottomPadding = Math.max(insets.bottom, 12);
-  const tabHeight = (seniorMode ? 78 : 68) + bottomPadding;
+  const tabHeight = (seniorMode ? readability.seniorTabBarHeight : readability.tabBarHeight) + bottomPadding;
 
   return (
     <Tabs
@@ -30,11 +31,11 @@ export default function TabLayout() {
           elevation: isDarkMode ? 0 : 8,
         },
         tabBarLabelStyle: {
-          fontSize: seniorMode ? 14 : 11,
+          fontSize: seniorMode ? readability.seniorMinimumFontSize : readability.minimumFontSize,
           fontWeight: '700',
           letterSpacing: 0.3,
           marginTop: 3,
-          lineHeight: seniorMode ? 19 : 15,
+          lineHeight: Math.ceil((seniorMode ? readability.seniorMinimumFontSize : readability.minimumFontSize) * readability.lineHeightRatio),
         },
         tabBarItemStyle: {
           minHeight: 56,

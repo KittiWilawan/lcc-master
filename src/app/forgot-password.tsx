@@ -4,7 +4,6 @@ import * as Linking from 'expo-linking';
 import { useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Image,
   SafeAreaView,
   ScrollView,
@@ -16,6 +15,8 @@ import {
   KeyboardAvoidingView,
   Platform
 } from 'react-native';
+import { AppAlert as Alert } from '../lib/appAlert';
+import { validateEmail } from '../lib/formValidation';
 import { supabase } from '../lib/supabase';
 import { getAuthErrorMessage } from '../lib/friendlyError';
 
@@ -26,7 +27,8 @@ export default function ForgotPasswordScreen() {
   const [isSuccess, setIsSuccess] = useState(false);
 
   const handleResetPassword = async () => {
-    if (!email) {
+    if (loading) return;
+    if (!email.trim()) {
       Alert.alert(
         'ข้อมูลไม่ครบถ้วน',
         'กรุณากรอกอีเมลของคุณเพื่อดำเนินการต่อ'
@@ -34,28 +36,32 @@ export default function ForgotPasswordScreen() {
       return;
     }
 
+    const validated = validateEmail(email);
+    if (validated.error) { Alert.error('อีเมลไม่ถูกต้อง', validated.error); return; }
     setLoading(true);
+    try {
     const redirectTo = Linking.createURL('/reset-password');
-    const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), { redirectTo });
-    setLoading(false);
+    const { error } = await supabase.auth.resetPasswordForEmail(validated.email, { redirectTo });
 
     if (error) {
-      Alert.alert('ส่งลิงก์ไม่สำเร็จ', getAuthErrorMessage(error));
+      Alert.error('ส่งลิงก์ไม่สำเร็จ', getAuthErrorMessage(error));
     } else {
       setIsSuccess(true);
-      Alert.alert(
-        'ส่งลิงก์สำเร็จ!',
-        'เราได้ส่งลิงก์สำหรับรีเซ็ตรหัสผ่านไปที่อีเมลของคุณแล้ว กรุณาตรวจสอบกล่องจดหมายของคุณ',
+      Alert.success(
+        'ตรวจกล่องจดหมาย',
+        'หากอีเมลนี้มีบัญชีอยู่ คุณจะได้รับลิงก์ตั้งรหัสผ่านใหม่ กรุณาตรวจกล่องจดหมายและจดหมายขยะ',
         [{ text: 'กลับไปหน้าเข้าสู่ระบบ', onPress: () => router.replace('/login') }]
       );
     }
+    } catch (error) { Alert.error('ส่งลิงก์ไม่สำเร็จ', getAuthErrorMessage(error)); }
+    finally { setLoading(false); }
   };
 
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView 
         style={{ flex: 1 }} 
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
 

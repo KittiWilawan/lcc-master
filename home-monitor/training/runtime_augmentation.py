@@ -25,6 +25,30 @@ def augment_window(observed, model, specification, rng, np):
         # One camera transform for all observations; preserve skeleton and temporal direction.
         result[:, geometry:geometry + 2] = (result[:, geometry:geometry + 2] - anchor) * scale + anchor + shift
         result[:, geometry + 2:geometry + 4] *= scale
+    if "rotationRangeDegrees" in specification:
+        lower, upper = specification["rotationRangeDegrees"]
+        if not np.isfinite([lower, upper]).all() or not -180 <= lower <= upper <= 180:
+            raise ValueError("Invalid camera rotation range")
+        angle = np.deg2rad(rng.uniform(lower, upper))
+        rotation = np.asarray([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]], dtype=np.float32)
+        anchor = np.asarray(specification["anchor"], dtype=np.float32)
+        if anchor.shape != (2,) or not np.isfinite(anchor).all():
+            raise ValueError("Invalid camera anchor")
+        geometry = count * 4
+        for frame in result:
+            coords = frame[:count * 3].reshape(count, 3)
+            previous_scale = max(frame[geometry + 2], frame[geometry + 3], model["normalizationMinScale"])
+            positions = coords[:, :2] * previous_scale + frame[geometry:geometry + 2]
+            positions = (positions - anchor) @ rotation.T + anchor
+            visible = frame[count * 3:count * 4] >= model["visibilityThreshold"]
+            selected = positions[visible] if visible.any() else positions
+            center = selected.astype(np.float64).mean(axis=0).astype(np.float32)
+            dimensions = selected.max(axis=0) - selected.min(axis=0)
+            new_scale = max(*dimensions, model["normalizationMinScale"])
+            coords[:, :2] = (positions - center) / new_scale
+            coords[:, 2] *= previous_scale / new_scale
+            frame[geometry:geometry + 2] = center
+            frame[geometry + 2:geometry + 4] = dimensions
     return result
 
 

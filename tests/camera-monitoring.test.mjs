@@ -13,14 +13,18 @@ async function load(relative, stubs = {}, globals = {}) {
   }).outputText;
   const module = { exports: {} }; const original = createRequire(filename);
   const context = vm.createContext({ module, exports: module.exports,
-    require: (name) => Object.hasOwn(stubs, name) ? stubs[name] : original(name),
+    require: (name) => Object.hasOwn(stubs, name) ? stubs[name] : name === './cameraLinkGuidance' ? guidance : name === './eventImage.ts' ? eventImage : name === './evidenceRetention' ? evidenceRetention : original(name),
     process: { env: { EXPO_PUBLIC_AI_MODE: 'app_background', EXPO_PUBLIC_CAMERA_TEST_TIMEOUT_MS: '20' } },
     URL, Request, Response, AbortController, DOMException, setTimeout, clearTimeout,
     console: { warn() {}, log() {} }, ...globals,
   });
   vm.runInContext(code, context, { filename }); return module.exports;
 }
+const guidance = await load('src/lib/cameraLinkGuidance.ts');
 const source = await load('src/lib/cameraSource.ts');
+const deliveryPolicy = await load('supabase/functions/native-camera-events/deliveryPolicy.ts');
+const eventImage = await load('supabase/functions/native-camera-events/eventImage.ts', {}, { atob });
+const evidenceRetention = await load('src/lib/evidenceRetention.ts');
 const policy = await load('src/lib/monitoringPolicy.ts', { './cameraSource': source });
 
 test('one HLS link is a valid AI source without a snapshot', () => {
@@ -33,10 +37,15 @@ test('invalid addresses and unsupported protocols cannot become ready', () => {
     assert.equal(policy.shouldMonitorCamera({ type: 'rtsp', url }, new Set()), false);
   }
 });
-test('selected families retain their camera scope with a single HLS link', () => {
+test('ready cameras monitor selected people even without a camera assignment', () => {
   const targets = new Set(['selected-person']);
-  assert.equal(policy.shouldMonitorCamera({ type: 'rtsp', url: 'https://camera.test/live.m3u8', assigned_member_id: 'other-person' }, targets), false);
+  assert.equal(policy.shouldMonitorCamera({ type: 'rtsp', url: 'https://camera.test/live.m3u8', assigned_member_id: 'other-person' }, targets), true);
   assert.equal(policy.shouldMonitorCamera({ type: 'rtsp', url: 'https://camera.test/live.m3u8', assigned_member_id: 'selected-person' }, targets), true);
+  assert.equal(policy.shouldMonitorCamera({ type: 'rtsp', url: 'https://camera.test/live.m3u8' }, targets), true);
+  assert.deepEqual([...policy.getCameraTargetMemberIds({ type: 'rtsp' }, targets)], ['selected-person']);
+  assert.deepEqual([...policy.getCameraTargetMemberIds({ type: 'rtsp', assigned_member_id: 'other-person' }, targets)], ['selected-person']);
+  assert.deepEqual([...policy.getCameraTargetMemberIds({ type: 'rtsp', assigned_member_id: 'selected-person' }, new Set())], []);
+  assert.deepEqual([...policy.getCameraTargetMemberIds({ type: 'rtsp', assigned_member_id: 'selected-person' }, new Set(['selected-person', 'second']))], ['selected-person']);
 });
 test('camera connection readiness requires successful native decoding', async () => {
   const urls = [];
@@ -60,6 +69,27 @@ test('web cannot claim HLS AI readiness just because a playlist loads', async ()
   }, { fetch: async () => ({ ok: true, headers: new Headers({ 'content-type': 'application/vnd.apple.mpegurl' }) }) });
   assert.equal((await app.testCameraConnection('https://camera.test/live.m3u8')).success, false);
 });
+test('home worker setup distinguishes a playlist from login pages and malformed camera links', async () => {
+  const url = 'https://camera.test/live.m3u8?ticket=test';
+  let response;
+  const app = await load('src/lib/cameraConnectionTest.ts', {
+    './cameraMonitoring': { hasNativeCameraMonitoring: () => false },
+  }, { fetch: async () => response, process: { env: { EXPO_PUBLIC_CAMERA_TEST_TIMEOUT_MS: '2000', EXPO_PUBLIC_AI_MODE: 'home_worker' } } });
+  for (const [type, body, ok] of [
+    ['text/html', '<html>Login</html>', false],
+    ['text/plain', '<html>Login</html>', false],
+    ['text/plain', '#EXTM3UX', false],
+    ['text/plain', '#EXTM3U\n#EXT-X-VERSION:3', true],
+  ]) {
+    response = new Response(body, { headers: { 'Content-Type': type } });
+    assert.equal((await app.testCameraConnection(url)).success, ok);
+  }
+  assert.ok(app.getCameraAddressIssue('http://127.0.0.2/live'));
+  assert.ok(app.getCameraAddressIssue('http://camera.localhost/live'));
+  assert.ok(guidance.cameraLinkGuidance('192.168.1.55/live', true, false));
+  assert.equal(guidance.cameraLinkGuidance('', true, false), null);
+});
+
 test('camera freshness requires recent frame and inference timestamps', async () => {
   const app = await load('src/lib/cameraMonitoring.ts', {
     'react-native': { Platform: { OS: 'web' }, NativeModules: {} }, 'react': {},
@@ -84,6 +114,18 @@ test('fresh images with slow inference must not claim monitoring readiness', asy
   assert.equal(app.isCameraMonitorReady({ ...state, inferenceMs: 45 }, now), true);
   assert.equal(app.isCameraMonitorReady({ ...state, inferenceMs: undefined }, now), false);
   assert.equal(app.isCameraMonitorReady({ ...state, inferenceMs: NaN }, now), false);
+});
+
+test('old native builds stop instead of silently treating selected people as everyone', async () => {
+  const configured = [];
+  const app = await load('src/lib/cameraMonitoring.ts', {
+    'react-native': { Platform: { OS: 'android' }, NativeModules: { BackgroundMonitoring: {
+      configure: async value => configured.push(JSON.parse(value)), testSource: async () => '{}', getStates: async () => '[]',
+      getCapabilities: async () => '{}',
+    } } }, react: {},
+  });
+  await assert.rejects(app.configureNativeCameraMonitoring([{ id: 'camera', targetMemberIds: ['target'] }]));
+  assert.equal(configured.length, 1); assert.equal(configured[0].length, 0);
 });
 test('network deadline covers a stalled response body', async () => {
   const app = await load('src/lib/networkRequest.ts', {
@@ -119,11 +161,12 @@ test('native delivery API rejects unauthenticated and expired device requests', 
     maybeSingle: async () => ({ data: null, error: null }) };
   const client = { auth: { getUser: async () => ({ data: { user: null }, error: null }) }, from: () => chain };
   await load('supabase/functions/native-camera-events/index.ts', {
+    './deliveryPolicy.ts': deliveryPolicy,
     'npm:@supabase/supabase-js@2.108.2': { createClient: () => client },
   }, { crypto: (await import('node:crypto')).webcrypto,
     TextEncoder, Uint8Array, Deno: { env: { get: () => 'synthetic-test-environment' }, serve: (fn) => { handler = fn; } } });
   const body = { deviceId: '00000000-0000-0000-0000-000000000001', familyId: '00000000-0000-0000-0000-000000000002' };
-  for (const action of ['register', 'event', 'revoke-user', 'revoke']) {
+  for (const action of ['register', 'event', 'revoke-user', 'revoke', 'push-self-test']) {
     const response = await handler(new Request('https://test.invalid', { method: 'POST', body: JSON.stringify({ ...body, action }) }));
     assert.equal(response.status, 401, action);
     assert.equal((await response.json()).code, 'unauthorized');
@@ -137,12 +180,46 @@ test('native registration cannot authorize a different family', async () => {
   const chain = { select: () => chain, eq: () => chain, then: (resolve) => resolve({ count: 0, error: null }) };
   const client = { auth: { getUser: async () => ({ data: { user: { id: 'synthetic-user' } }, error: null }) }, from: () => chain };
   await load('supabase/functions/native-camera-events/index.ts', {
+    './deliveryPolicy.ts': deliveryPolicy,
     'npm:@supabase/supabase-js@2.108.2': { createClient: () => client },
   }, { crypto: (await import('node:crypto')).webcrypto, TextEncoder, Uint8Array,
     Deno: { env: { get: () => 'synthetic-test-environment' }, serve: (fn) => { handler = fn; } } });
   const response = await handler(new Request('https://test.invalid', { method: 'POST', headers: { Authorization: 'Bearer synthetic-user-session' },
     body: JSON.stringify({ action: 'register', deviceId: '00000000-0000-0000-0000-000000000001', familyId: '00000000-0000-0000-0000-000000000002' }) }));
   assert.equal(response.status, 403); assert.equal((await response.json()).code, 'family_forbidden');
+});
+
+test('foreground gallery requests cannot read a family outside the signed-in membership', async () => {
+  let handler;
+  const chain = { select: () => chain, eq: () => chain, then: (resolve) => resolve({ count: 0, error: null }) };
+  const client = { auth: { getUser: async () => ({ data: { user: { id: 'synthetic-user' } }, error: null }) }, from: () => chain };
+  await load('supabase/functions/native-camera-events/index.ts', {
+    './deliveryPolicy.ts': deliveryPolicy, 'npm:@supabase/supabase-js@2.108.2': { createClient: () => client },
+  }, { crypto: (await import('node:crypto')).webcrypto, TextEncoder, Uint8Array,
+    Deno: { env: { get: () => 'synthetic-test-environment' }, serve: (fn) => { handler = fn; } } });
+  const response = await handler(new Request('https://test.invalid', { method: 'POST', headers: { Authorization: 'Bearer synthetic-session' },
+    body: JSON.stringify({ action: 'identity-references', familyId: '00000000-0000-0000-0000-000000000002' }) }));
+  assert.equal(response.status, 403); assert.equal((await response.json()).code, 'family_forbidden');
+});
+
+test('same fresh server gallery revision avoids clearing or redownloading templates on resume', async () => {
+  const members = [{ id: 'person', display_name: 'บุคคลทดสอบ', identity_consent_at: 'synthetic-consent' }];
+  const gallery = { userId: 'user', familyId: 'family', revision: 'shared-server-revision', expiresAt: Date.now() + 300000 };
+  const app = await load('src/lib/monitoringIdentity.ts', {
+    './supabase': { supabase: { functions: { invoke: async () => ({ data: { ...gallery, members: [] }, error: null }) } } },
+    './cameraMonitoring': { supportsMonitoringIdentity: () => true, getIdentityGalleryStatus: async () => gallery,
+      clearMonitoringIdentity: async () => { throw new Error('Fresh gallery must remain'); }, configureMonitoringIdentity: async () => { throw new Error('No replacement needed'); } },
+  }, { fetch: async () => { throw new Error('No photo request expected'); } });
+  await app.syncMonitoringIdentity('user', 'family', members, new AbortController().signal, async () => true);
+});
+
+test('late gallery response cannot overwrite identity after logout or a family change', async () => {
+  const app = await load('src/lib/monitoringIdentity.ts', {
+    './supabase': { supabase: { functions: { invoke: async () => ({ data: { userId: 'user', familyId: 'family', revision: 'revision', members: [] }, error: null }) } } },
+    './cameraMonitoring': { supportsMonitoringIdentity: () => true, getIdentityGalleryStatus: async () => { throw new Error('Scope revoked'); },
+      clearMonitoringIdentity: async () => { throw new Error('Must not change next account'); }, configureMonitoringIdentity: async () => { throw new Error('Must not install'); } },
+  });
+  await app.syncMonitoringIdentity('user', 'family', [{ id: 'person', identity_consent_at: 'yes' }], new AbortController().signal, async () => false);
 });
 test('offline native fall events preserve timestamp, local image and notification truth', async () => {
   const storage = new Map([['familyId', 'synthetic-family']]);
@@ -183,12 +260,12 @@ test('local notification permission does not pretend remote token registration s
     'react-native': { Platform: { OS: 'android' } },
     'expo-constants': { executionEnvironment: 'standalone', expoConfig: { extra: { eas: { projectId: 'synthetic-project' } } },
       ExecutionEnvironment: { StoreClient: 'store' } },
-    '@react-native-async-storage/async-storage': { setItem: async (key, value) => storage.set(key, value), removeItem: async (key) => storage.delete(key) },
-    './supabase': {}, './phone': {},
+    '@react-native-async-storage/async-storage': { getItem: async key => storage.get(key) ?? null, setItem: async (key, value) => storage.set(key, value), removeItem: async (key) => storage.delete(key) },
+    './supabase': { supabase: { auth: { getSession: async () => ({ data: { session: { user: { id: 'synthetic-user' } } } }) } } }, './phone': {},
     'expo-notifications': { getPermissionsAsync: async () => ({ status: 'granted' }), getExpoPushTokenAsync: async () => { throw new Error('Synthetic FCM unavailable'); } },
   });
-  assert.equal(await app.registerForPushNotificationsAsync(), true);
-  assert.equal(storage.get('@push_registration_status'), 'local_only');
+  assert.equal(await app.registerForPushNotificationsAsync(), false);
+  assert.equal(storage.get('@push_registration_status'), 'remote_unavailable');
   assert.equal(storage.has('@expo_push_token'), false);
 });
 
@@ -204,4 +281,43 @@ test('native events stay local until native delivery confirms cloud progress', a
   assert.equal(local.savedLocally, true); assert.equal(local.cloudSynced, undefined);
   const delivered = await app.recordFallEvent({ ...params, cloudImagePath: 'test-family/native-event.jpg' });
   assert.equal(delivered.cloudSynced, true); assert.equal(delivered.image_url, 'test-family/native-event.jpg');
+  const metadata = await app.recordFallEvent({ eventId: 'metadata-only', familyId: 'test-family', deferCloudSync: true, cloudSynced: true });
+  assert.equal(metadata.cloudSynced, true);
+  const cached = JSON.parse(storage.get(app.STORAGE_KEY_FALL_EVIDENCE));
+  assert.equal(cached.find((record) => record.id === 'metadata-only').cloudSynced, true);
+  for (let index = 0; index < 45; index++) await app.recordFallEvent({ eventId: `unsynced-${index}`, familyId: 'test-family', deferCloudSync: true });
+  const backlog = JSON.parse(storage.get(app.STORAGE_KEY_FALL_EVIDENCE));
+  assert.equal(backlog.filter((record) => record.id.startsWith('unsynced-')).length, 45);
+});
+
+test('temporary auth bootstrap failure does not erase the native outbox as if the user logged out', async () => {
+  for (const unavailable of [true, false]) {
+    const effects = []; let stops = 0;
+    const controller = await load('src/components/BackgroundMonitoringController.tsx', {
+      react: { useEffect: (effect) => effects.push(effect) },
+      'react-native': { Platform: { OS: 'android' }, AppState: { currentState: 'active' } },
+      '@react-native-async-storage/async-storage': {}, './missing': {},
+      '../lib/fallEvidence': {}, '../lib/backgroundMonitoring': { stopBackgroundMonitoring: async () => { stops++; } },
+      '../lib/monitoringPolicy': {}, '../lib/supabase': {}, '../lib/cameraSource': {}, '../lib/nativeEventDelivery': {}, '../lib/monitoringIdentity': {},
+      '../lib/cameraMonitoring': { hasNativeCameraMonitoring: () => true }, '../lib/monitoringLifecycle': {},
+    });
+    controller.BackgroundMonitoringController({ session: null, authenticationUnavailable: unavailable });
+    const cleanup = effects[0](); await Promise.resolve(); assert.equal(stops, unavailable ? 0 : 1); cleanup();
+  }
+});
+
+test('UI teardown cancels listeners but keeps independent native monitoring running', async () => {
+  const effects = []; const configurations = []; let removed = 0;
+  const controller = await load('src/components/BackgroundMonitoringController.tsx', {
+    react: { useEffect: (effect) => effects.push(effect) },
+    'react-native': { Platform: { OS: 'android' }, AppState: { currentState: 'active', addEventListener: () => ({ remove: () => { removed++; } }) } },
+    '@react-native-async-storage/async-storage': { getItem: async () => 'synthetic-family' },
+    '../lib/fallEvidence': {}, '../lib/backgroundMonitoring': {}, '../lib/monitoringPolicy': {}, '../lib/supabase': {}, '../lib/cameraSource': {},
+    '../lib/nativeEventDelivery': {}, '../lib/monitoringIdentity': {}, '../lib/monitoringLifecycle': { reconcileMonitoringOwner: async () => {} },
+    '../lib/cameraMonitoring': { hasNativeCameraMonitoring: () => true, configureNativeCameraMonitoring: async (sources) => configurations.push(sources),
+      subscribeCameraMonitoring: () => () => { removed++; }, onCameraMonitoringRefresh: () => () => { removed++; } },
+  });
+  controller.BackgroundMonitoringController({ session: { user: { id: 'synthetic-user' } } });
+  const cleanup = effects[0](); cleanup(); await Promise.resolve(); await Promise.resolve();
+  assert.equal(configurations.length, 0); assert.equal(removed, 3);
 });

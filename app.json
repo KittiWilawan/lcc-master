@@ -2,7 +2,7 @@
   "expo": {
     "name": "LookLanCare",
     "slug": "looklancare",
-    "version": "1.0.6",
+    "version": "1.0.34",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "llc",
@@ -13,7 +13,7 @@
       "bundleIdentifier": "com.looklancare.app"
     },
     "android": {
-      "versionCode": 7,
+      "versionCode": 35,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",

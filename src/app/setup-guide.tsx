@@ -1,21 +1,27 @@
+import { CareText as Text } from '../components/CareText';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   ScrollView,
   Share,
   StyleSheet,
-  Text,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../context/ThemeContext';
 import { checkSystemReadiness, ReadinessStep, SystemReadiness } from '../lib/systemReadiness';
-import { registerForPushNotificationsAsync, sendLocalTestNotification } from '../lib/pushNotifications';
+import { sendLocalTestNotification } from '../lib/pushNotifications';
+import { AppAlert as Alert } from '../lib/appAlert';
+import forms from '../config/forms.json';
+import { MonitoringStatusCard } from '../components/MonitoringStatusCard';
+import readability from '../config/readability.json';
+import { useCameraMonitoringStates } from '../lib/cameraMonitoring';
+import { useMonitoringClock } from '../lib/useMonitoringClock';
+import { describeLiveMonitoring } from '../lib/monitoringStatus';
 import {
   canManageMonitorDevices,
   createMonitorPairingCode,
@@ -31,15 +37,18 @@ const ICONS: Record<ReadinessStep['id'], keyof typeof MaterialCommunityIcons.gly
   recipient: 'account-heart-outline',
   identity: 'face-recognition',
   camera: 'cctv',
+  analysis: 'brain',
   notification: 'bell-ring-outline',
+  phoneReceipt: 'cellphone-check',
 };
 
 export default function SetupGuideScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { colors, isDarkMode } = useTheme();
+  const { colors, isDarkMode, seniorMode } = useTheme();
   const [result, setResult] = useState<SystemReadiness | null>(null);
   const [checking, setChecking] = useState(true);
+  const [showCompleted, setShowCompleted] = useState(false);
   const [testingNotification, setTestingNotification] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [familyId, setFamilyId] = useState('');
@@ -49,6 +58,10 @@ export default function SetupGuideScreen() {
   const [deviceError, setDeviceError] = useState('');
   const [creatingPairing, setCreatingPairing] = useState(false);
   const [pairingCode, setPairingCode] = useState<MonitorPairingCode | null>(null);
+  const cameraStates = useCameraMonitoringStates();
+  const statusTime = useMonitoringClock();
+  const liveMonitoring = result?.monitoringContext ? describeLiveMonitoring({ ...result.monitoringContext,
+    targetIds: new Set(result.monitoringContext.targetIds), states: cameraStates, now: statusTime, loading: checking }) : result?.monitoring;
 
   const loadMonitorDevices = useCallback(async () => {
     setLoadingDevices(true);
@@ -81,11 +94,12 @@ export default function SetupGuideScreen() {
       const readiness = await checkSystemReadiness();
       setResult(readiness);
     } catch {
+      setResult(null);
       setErrorMessage('ตรวจสอบระบบไม่สำเร็จ กรุณาตรวจอินเทอร์เน็ตแล้วลองอีกครั้ง');
     } finally {
       setChecking(false);
     }
-    await loadMonitorDevices();
+    if (process.env.EXPO_PUBLIC_AI_MODE === 'home_worker') await loadMonitorDevices();
   }, [loadMonitorDevices]);
 
   useFocusEffect(useCallback(() => {
@@ -93,14 +107,19 @@ export default function SetupGuideScreen() {
   }, [runCheck]));
 
   const openStep = (step: ReadinessStep) => {
+    if ((step.id === 'notification' || step.id === 'phoneReceipt') && step.route === '/profile') {
+      router.push({ pathname: '/profile', params: { section: 'notifications', setup: 'true' } });
+      return;
+    }
     if (step.id === 'camera') {
-      router.push({ pathname: '/home', params: { openCameraSetup: 'true' } });
+      router.push({ pathname: '/home', params: { openCameraSetup: step.ready ? '' : 'true', setup: 'true' } });
       return;
     }
     if (step.route) {
-      router.push(step.route);
+      router.push({ pathname: step.route, params: { ...step.params, setup: 'true' } });
     }
   };
+  const nextStep = result?.steps.find(step => !step.ready);
 
   const progress = result?.progress ?? 0;
 
@@ -110,7 +129,7 @@ export default function SetupGuideScreen() {
     try {
       setPairingCode(await createMonitorPairingCode(familyId));
     } catch {
-      Alert.alert('สร้างรหัสไม่สำเร็จ', 'กรุณาตรวจอินเทอร์เน็ตและสิทธิ์เจ้าของครอบครัว แล้วลองอีกครั้ง');
+      Alert.error('สร้างรหัสไม่สำเร็จ', 'กรุณาตรวจอินเทอร์เน็ตและสิทธิ์เจ้าของครอบครัว แล้วลองอีกครั้ง');
     } finally {
       setCreatingPairing(false);
     }
@@ -138,7 +157,7 @@ export default function SetupGuideScreen() {
                 await revokeMonitorDevice(familyId, device.id);
                 setDevices((current) => current.filter((item) => item.id !== device.id));
               } catch {
-                Alert.alert('ยกเลิกไม่สำเร็จ', 'กรุณาตรวจอินเทอร์เน็ตแล้วลองอีกครั้ง');
+                Alert.error('ยกเลิกไม่สำเร็จ', 'กรุณาตรวจอินเทอร์เน็ตแล้วลองอีกครั้ง');
               }
             })();
           },
@@ -155,28 +174,21 @@ export default function SetupGuideScreen() {
   };
 
   const testNotification = async () => {
+    if (testingNotification) return;
     setTestingNotification(true);
     try {
-      const enabled = await registerForPushNotificationsAsync();
-      if (!enabled) {
-        Alert.alert(
-          'ยังเปิดการแจ้งเตือนไม่ได้',
-          'เปิดสิทธิ์การแจ้งเตือนให้ LookLanCare ในการตั้งค่ามือถือ แล้วกลับมาทดสอบอีกครั้ง'
-        );
-        return;
-      }
       const sent = await sendLocalTestNotification();
       if (!sent) {
-        Alert.alert(
-          'ต้องใช้แอปเวอร์ชันทดสอบ',
-          'Expo Go บน Android ไม่รองรับการแจ้งเตือนส่วนนี้ กรุณาติดตั้ง Development Build แล้วทดสอบอีกครั้ง'
+        Alert.error(
+          'ยังทดสอบไม่ได้',
+          'เปิดสิทธิ์การแจ้งเตือนให้ LookLanCare ในการตั้งค่ามือถือ แล้วกลับมาทดสอบบนมือถืออีกครั้ง'
         );
         return;
       }
-      Alert.alert('ทดสอบสำเร็จ', 'มือถือเครื่องนี้พร้อมแสดงการแจ้งเตือนจาก LookLanCare');
+      Alert.success('ตั้งเวลาทดสอบแล้ว', `ดูแถบแจ้งเตือนภายใน ${forms.notificationTestDelaySeconds} วินาที ทดสอบเฉพาะเครื่องนี้`);
       await runCheck();
     } catch {
-      Alert.alert('ทดสอบไม่สำเร็จ', 'กรุณาตรวจสิทธิ์การแจ้งเตือนและลองอีกครั้ง');
+      Alert.error('ทดสอบไม่สำเร็จ', 'กรุณาตรวจสิทธิ์การแจ้งเตือนและลองอีกครั้ง');
     } finally {
       setTestingNotification(false);
     }
@@ -206,7 +218,7 @@ export default function SetupGuideScreen() {
             <View style={styles.progressTextBlock}>
               <Text style={styles.progressEyebrow}>ความพร้อมของระบบ</Text>
               <Text style={styles.progressTitle}>
-                {result?.ready ? 'พร้อมเริ่มดูแลแล้ว' : `สำเร็จ ${result?.completedCount ?? 0} จาก ${result?.totalCount ?? '…'} ขั้นตอน`}
+                {checking ? 'กำลังตรวจรายการตั้งค่า' : errorMessage ? 'ยังตรวจการตั้งค่าไม่ได้' : result?.ready ? 'ตั้งค่าบนเครื่องนี้ครบแล้ว' : `สำเร็จ ${result?.completedCount ?? 0} จาก ${result?.totalCount ?? '…'} ขั้นตอน`}
               </Text>
             </View>
             <Text style={styles.progressPercent}>{progress}%</Text>
@@ -216,10 +228,18 @@ export default function SetupGuideScreen() {
           </View>
           <Text style={styles.progressHint}>
             {result?.ready
-              ? 'กล้อง AI และการแจ้งเตือนพร้อมทำงาน'
-              : 'แตะรายการที่ยังไม่พร้อมเพื่อไปตั้งค่าต่อ'}
+              ? 'ดูผลการทำงานสดด้านล่าง และทดลองรับแจ้งเตือนก่อนเริ่มใช้'
+              : 'ทำทีละข้อ เมื่อบันทึกแล้วกลับมาตรวจขั้นตอนถัดไปได้'}
           </Text>
         </View>
+
+        {nextStep && !checking && <TouchableOpacity style={styles.checkButton} onPress={() => openStep(nextStep)}
+          accessibilityRole="button" accessibilityLabel={`ทำต่อ ${nextStep.title}`}>
+          <MaterialCommunityIcons name={ICONS[nextStep.id]} size={26} color="#ffffff" />
+          <View style={{ flex: 1 }}><Text style={styles.checkButtonText}>ทำต่อ: {nextStep.title}</Text>
+            <Text style={{ color: '#ffffff' }}>{nextStep.actionLabel}</Text></View>
+          <MaterialCommunityIcons name="arrow-right" size={24} color="#ffffff" />
+        </TouchableOpacity>}
 
         {errorMessage ? (
           <View style={styles.errorCard}>
@@ -232,7 +252,7 @@ export default function SetupGuideScreen() {
         ) : null}
 
         <View style={styles.sectionHeader}>
-          <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>รายการตั้งค่า</Text>
+          <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>สิ่งที่ยังต้องทำ</Text>
           <Text style={[styles.sectionSubtitle, { color: colors.textSecondary }]}>ระบบจะตรวจให้อัตโนมัติเมื่อกลับมาหน้านี้</Text>
         </View>
 
@@ -243,17 +263,15 @@ export default function SetupGuideScreen() {
           </View>
         ) : (
           <View style={styles.stepList}>
-            {result?.steps.map((step, index) => (
+            {result?.steps.map((step, index) => !step.ready && (
               <TouchableOpacity
                 key={step.id}
                 style={[
                   styles.stepCard,
                   { backgroundColor: colors.card, borderColor: step.ready ? '#86efac' : colors.cardBorder },
                 ]}
-                onPress={() => step.ready ? undefined : openStep(step)}
-                disabled={step.ready}
+                onPress={() => openStep(step)}
                 accessibilityRole="button"
-                accessibilityState={{ disabled: step.ready }}
                 accessibilityLabel={`${step.title} ${step.ready ? 'พร้อมแล้ว' : 'ยังไม่พร้อม'}`}
               >
                 <View style={[styles.stepNumber, { backgroundColor: step.ready ? '#dcfce7' : colors.accentBg }]}>
@@ -269,13 +287,49 @@ export default function SetupGuideScreen() {
                     <Text style={[styles.stepTitle, { color: colors.textPrimary }]}>{step.title}</Text>
                   </View>
                   <Text style={[styles.stepDescription, { color: colors.textSecondary }]}>{step.description}</Text>
-                  {!step.ready ? <Text style={[styles.stepAction, { color: colors.accentText }]}>{step.actionLabel}</Text> : null}
+                  <Text style={[styles.stepAction, { color: colors.accentText }]}>{step.ready ? 'ดูหรือแก้ไขการตั้งค่า' : step.actionLabel}</Text>
                 </View>
-                {!step.ready ? <MaterialCommunityIcons name="chevron-right" size={24} color={colors.textMuted} /> : null}
+                <MaterialCommunityIcons name="chevron-right" size={24} color={colors.textMuted} />
               </TouchableOpacity>
             ))}
           </View>
         )}
+
+        {result && result.completedCount > 0 && <>
+          <TouchableOpacity onPress={() => setShowCompleted(value => !value)} accessibilityRole="button"
+            accessibilityState={{ expanded: showCompleted }} testID="completed-steps-toggle"
+            style={[styles.notificationButton, { minHeight: seniorMode ? readability.seniorTouchTargetSize : readability.touchTargetSize,
+              borderColor: colors.cardBorder, backgroundColor: colors.card }]}>
+            <MaterialCommunityIcons name="check-circle-outline" size={24} color={colors.accentText} />
+            <Text style={[styles.completedLabel, { color: colors.accentText }]}>{showCompleted ? 'ย่อรายการที่เสร็จแล้ว' : `ดูหรือแก้ไขที่ตั้งค่าแล้ว ${result.completedCount} รายการ`}</Text>
+            <MaterialCommunityIcons name={showCompleted ? 'chevron-up' : 'chevron-down'} size={24} color={colors.accentText} />
+          </TouchableOpacity>
+          {showCompleted && <View style={styles.stepList} testID="completed-steps-list">{result.steps.filter(step => step.ready).map(step => (
+            <TouchableOpacity key={step.id} onPress={() => openStep(step)} accessibilityRole="button"
+              accessibilityLabel={`ดูหรือแก้ไข ${step.title}`} style={[styles.stepCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+              <MaterialCommunityIcons name="check-circle-outline" size={24} color={colors.accentText} />
+              <View style={styles.stepBody}><Text style={[styles.stepTitle, { color: colors.textPrimary }]}>{step.title}</Text>
+                <Text style={[styles.stepDescription, { color: colors.textSecondary }]}>{step.description}</Text></View>
+              <MaterialCommunityIcons name="chevron-right" size={24} color={colors.textMuted} />
+            </TouchableOpacity>
+          ))}</View>}
+        </>}
+
+        {result?.ready && <Text style={{ color: colors.textSecondary }}>ไม่มีรายการตั้งค่าค้างอยู่ ตรวจสถานะสดและทดลองรับแจ้งเตือนด้านล่าง</Text>}
+        {liveMonitoring && !checking && <MonitoringStatusCard summary={liveMonitoring} />}
+
+        <TouchableOpacity
+          style={[styles.notificationButton, { borderColor: colors.cardBorder, backgroundColor: colors.card }]}
+          onPress={() => router.push('/video-test')}
+          accessibilityRole="button"
+          accessibilityLabel="ทดสอบ AI ด้วยวิดีโอจากมือถือ"
+        >
+          <MaterialCommunityIcons name="video-check-outline" size={26} color={colors.accentText} />
+          <View style={styles.notificationButtonText}>
+            <Text style={[styles.notificationButtonTitle, { color: colors.textPrimary }]}>ทดสอบ AI ด้วยวิดีโอ</Text>
+            <Text style={[styles.notificationButtonSubtitle, { color: colors.textSecondary }]}>ใช้ขอบเขตคนเดียวกับกล้อง ไม่ส่งเหตุทดสอบให้ครอบครัว</Text>
+          </View>
+        </TouchableOpacity>
 
         <TouchableOpacity
           style={[styles.checkButton, checking && styles.checkButtonDisabled]}
@@ -304,7 +358,12 @@ export default function SetupGuideScreen() {
           </View>
         </TouchableOpacity>
 
-        <View style={[styles.computerCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+        <TouchableOpacity accessibilityRole="button" style={[styles.notificationButton, { borderColor: colors.cardBorder, backgroundColor: colors.card }]}
+          onPress={() => router.push({ pathname: '/profile', params: { section: 'notifications', setup: 'true' } })}>
+          <MaterialCommunityIcons name="bell-outline" size={24} color={colors.accentText} />
+          <Text style={[styles.notificationButtonText, { color: colors.textPrimary }]}>ทดสอบรับจากระบบส่วนกลางและดูผลบนเครื่องนี้</Text>
+        </TouchableOpacity>
+        {process.env.EXPO_PUBLIC_AI_MODE === 'home_worker' && <View style={[styles.computerCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
           <View style={styles.computerHeader}>
             <View style={[styles.computerIcon, { backgroundColor: colors.accentBg }]}>
               <MaterialCommunityIcons name="desktop-tower-monitor" size={26} color={colors.accentText} />
@@ -400,10 +459,10 @@ export default function SetupGuideScreen() {
               )}
             </>
           )}
-        </View>
+        </View>}
 
         {result?.ready ? (
-          <TouchableOpacity style={styles.homeButton} onPress={() => router.replace('/home')}>
+          <TouchableOpacity style={styles.homeButton} onPress={() => router.replace({ pathname: '/home', params: { setup: '', openCameraSetup: '' } })}>
             <Text style={styles.homeButtonText}>ไปหน้าหลักและเริ่มดูแล</Text>
             <MaterialCommunityIcons name="arrow-right" size={22} color="#065f46" />
           </TouchableOpacity>
@@ -452,12 +511,13 @@ const styles = StyleSheet.create({
   stepNumberText: { fontSize: 16, fontWeight: '900' },
   stepBody: { flex: 1 },
   stepTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  stepTitle: { fontSize: 15, fontWeight: '900' },
+  stepTitle: { flexShrink: 1, fontSize: 15, fontWeight: '900' },
   stepDescription: { fontSize: 12, lineHeight: 18, marginTop: 5 },
   stepAction: { fontSize: 13, fontWeight: '800', marginTop: 8 },
-  checkButton: { minHeight: 54, borderRadius: 16, backgroundColor: '#059669', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, paddingHorizontal: 16 },
+  checkButton: { minHeight: readability.seniorTouchTargetSize, borderRadius: 16, backgroundColor: '#059669', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, paddingHorizontal: 16, paddingVertical: 12 },
   checkButtonDisabled: { opacity: 0.65 },
-  checkButtonText: { color: '#ffffff', fontSize: 15, fontWeight: '900' },
+  checkButtonText: { flexShrink: 1, color: '#ffffff', fontSize: 15, fontWeight: '900' },
+  completedLabel: { flex: 1, fontWeight: '700' },
   notificationButton: { minHeight: 64, borderRadius: 16, borderWidth: 1, flexDirection: 'row', alignItems: 'center', gap: 11, paddingHorizontal: 16, paddingVertical: 10 },
   notificationButtonText: { flex: 1 },
   notificationButtonTitle: { fontSize: 14, fontWeight: '900' },

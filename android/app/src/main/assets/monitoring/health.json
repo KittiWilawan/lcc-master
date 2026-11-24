@@ -1,0 +1,14 @@
+{
+  "pollMs": 2000,
+  "startupGraceMs": 30000,
+  "frameStaleMs": 12000,
+  "analysisStaleMs": 12000,
+  "unchangedContentMs": 15000,
+  "problemDebounceMs": 6000,
+  "recoveryDebounceMs": 4000,
+  "notificationCooldownMs": 60000,
+  "queueNearFullRatio": 0.8,
+  "notificationId": 4103,
+  "openAppRequestCode": 4104,
+  "channelId": "looklancare-monitoring-health"
+}

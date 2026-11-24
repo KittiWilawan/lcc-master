@@ -10,6 +10,7 @@ import {
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as LocalAuth from 'expo-local-authentication';
+import { PIN_LENGTH } from '../lib/formValidation';
 
 interface AppLockScreenProps {
   onUnlock: () => void;
@@ -47,11 +48,12 @@ export default function AppLockScreen({ onUnlock }: AppLockScreenProps) {
   }, [tryBiometric]);
 
   const handlePress = useCallback(async (digit: string) => {
+    if (pin.length >= PIN_LENGTH) return;
     const newPin = pin + digit;
     setPin(newPin);
     setError(false);
 
-    if (newPin.length === 4) {
+    if (newPin.length === PIN_LENGTH) {
       try {
         const storedPin = await AsyncStorage.getItem('@app_lock_pin');
         if (storedPin === newPin) {
@@ -77,7 +79,7 @@ export default function AppLockScreen({ onUnlock }: AppLockScreenProps) {
     setPin(prev => prev.slice(0, -1));
   };
 
-  const dots = [0, 1, 2, 3];
+  const dots = Array.from({ length: PIN_LENGTH }, (_, index) => index);
   const keys = [
     ['1', '2', '3'],
     ['4', '5', '6'],
@@ -92,7 +94,7 @@ export default function AppLockScreen({ onUnlock }: AppLockScreenProps) {
           <MaterialCommunityIcons name="shield-lock" size={36} color="#059669" />
         </View>
         <Text style={styles.title}>LookLanCare</Text>
-        <Text style={styles.subtitle}>กรุณาใส่ PIN 4 หลักเพื่อปลดล็อก</Text>
+        <Text style={styles.subtitle}>กรุณาใส่ PIN {PIN_LENGTH} หลักเพื่อปลดล็อก</Text>
 
         <Animated.View style={[styles.dotsRow, { transform: [{ translateX: shakeAnim }] }]}>
           {dots.map((i) => (

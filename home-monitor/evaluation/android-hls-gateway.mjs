@@ -5,18 +5,22 @@ import { resolve, extname, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 
 const config = JSON.parse(await readFile(process.argv[2], 'utf8'));
+if (config.encoderThreads !== undefined && (!Number.isInteger(config.encoderThreads) || config.encoderThreads < 1)) throw new Error('Positive encoderThreads required');
 const root = resolve(config.root);
+const liveDirectory = resolve(root, config.liveSubdirectory ?? 'live');
+if (!liveDirectory.startsWith(root + sep)) throw new Error('Live output must stay inside the fixture root');
 const cases = JSON.parse(await readFile(resolve(root, 'cases.json'), 'utf8'));
 let paused = false;
-await mkdir(resolve(root, 'live'), { recursive: true });
+await mkdir(liveDirectory, { recursive: true });
 const live = spawn(config.ffmpeg, [
   '-hide_banner', '-loglevel', 'error', '-y', '-re', '-stream_loop', '-1', '-i', config.liveVideo,
   '-an', '-vf', `scale=${config.maxDimension}:${config.maxDimension}:force_original_aspect_ratio=decrease`,
   '-r', String(config.frameRate), '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
+  ...(config.encoderThreads === undefined ? [] : ['-threads', String(config.encoderThreads)]),
   '-g', String(config.frameRate * config.segmentSeconds), '-sc_threshold', '0',
   '-f', 'hls', '-hls_time', String(config.segmentSeconds), '-hls_list_size', String(config.playlistSize),
-  '-hls_flags', 'delete_segments+omit_endlist', '-hls_segment_filename', resolve(root, 'live', 'segment-%06d.ts'),
-  resolve(root, 'live', 'live.m3u8'),
+  '-hls_flags', 'delete_segments+omit_endlist+temp_file', '-hls_segment_filename', resolve(liveDirectory, 'segment-%06d.ts'),
+  resolve(liveDirectory, 'live.m3u8'),
 ], { windowsHide: true, stdio: ['ignore', 'ignore', 'inherit'] });
 let stopping = false;
 function shutdown() {
@@ -35,10 +39,13 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/cases') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(cases)); return; }
     if (url.pathname === '/invalid.jpg') { res.setHeader('Content-Type', 'image/jpeg'); res.end('not an image'); return; }
     if (paused && url.pathname.startsWith('/live/')) { res.writeHead(503); res.end('test interruption'); return; }
-    const path = resolve(root, `.${decodeURIComponent(url.pathname)}`);
+    const path = url.pathname.startsWith('/live/')
+      ? resolve(liveDirectory, `.${decodeURIComponent(url.pathname.slice('/live'.length))}`)
+      : resolve(root, `.${decodeURIComponent(url.pathname)}`);
     if (!path.startsWith(root + sep)) { res.writeHead(403); res.end(); return; }
     const file = await stat(path);
-    res.setHeader('Content-Type', extname(path) === '.m3u8' ? 'application/vnd.apple.mpegurl' : 'video/mp2t');
+    const mime = { '.m3u8': 'application/vnd.apple.mpegurl', '.jpg': 'image/jpeg', '.png': 'image/png', '.ts': 'video/mp2t' };
+    res.setHeader('Content-Type', mime[extname(path)] ?? 'application/octet-stream');
     res.setHeader('Cache-Control', 'no-store'); res.setHeader('Content-Length', file.size);
     createReadStream(path).pipe(res);
   } catch { res.writeHead(404); res.end(); }

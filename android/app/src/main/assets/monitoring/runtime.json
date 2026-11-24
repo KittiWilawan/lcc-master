@@ -1,5 +1,8 @@
 {
   "frameIntervalMs": 300,
+  "maxUnchangedFrameMs": 2000,
+  "maxPendingFrames": 3,
+  "maxPendingFrameAgeMs": 1800,
   "maxRealtimeInferenceMs": 600,
   "maxFrameDimension": 640,
   "maxCameras": 2,
@@ -16,7 +19,7 @@
   "bufferRebufferMs": 1000,
   "jpegQuality": 70,
   "maxPoses": 6,
-  "poseRunningMode": "IMAGE",
+  "poseRunningMode": "VIDEO",
   "initialWindowPolicy": "repeat_initial",
   "minPoseConfidence": 0.35,
   "maxTrackingDistance": 0.2,

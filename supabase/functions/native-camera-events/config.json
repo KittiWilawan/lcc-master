@@ -6,5 +6,10 @@
   "eventLeaseSeconds": 60,
   "requestTimeoutMs": 15000,
   "pushUrl": "https://exp.host/--/api/v2/push/send",
+  "receiptUrl": "https://exp.host/--/api/v2/push/getReceipts",
+  "receiptMaxAgeMs": 900000,
+  "maxPushBatch": 100,
+  "maxIdentityMembers": 8,
+  "identityReferenceTtlSeconds": 300,
   "pushChannel": "emergency-fall-channel"
 }

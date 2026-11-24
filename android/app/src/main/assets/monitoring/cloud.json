@@ -1,7 +1,9 @@
 {
+  "maxImageBytes": 1048576,
   "functionName": "native-camera-events",
   "tokenRenewBeforeMs": 86400000,
   "requestTimeoutMs": 30000,
   "retryInitialMs": 5000,
+  "maxAcknowledgements": 100,
   "retryMaxMs": 300000
 }

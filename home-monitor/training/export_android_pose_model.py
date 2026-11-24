@@ -7,7 +7,7 @@ import argparse
 import hashlib
 import json
 import struct
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import joblib
 import numpy as np
@@ -70,11 +70,16 @@ def main():
     error = float(np.max(np.abs(model.predict_proba(samples)[:, 1] - actual)))
     if error > 1e-12:
         raise ValueError(f"Export parity failed: {error}")
-    (args.output / "pose_landmarker_lite.task").write_bytes(args.landmarker.read_bytes())
+    landmarker_asset = template.get("landmarkerAsset", "monitoring/pose_landmarker_lite.task") if template else "monitoring/pose_landmarker_lite.task"
+    asset_path = PurePosixPath(landmarker_asset)
+    if len(asset_path.parts) != 2 or asset_path.parts[0] != "monitoring" or asset_path.name in (".", ".."):
+        raise ValueError("Landmarker asset must stay inside the monitoring asset directory")
+    (args.output / asset_path.name).write_bytes(args.landmarker.read_bytes())
     metadata = {
         "formatVersion": 2 if gradient else 1,
         "modelAsset": "monitoring/fall_forest.bin",
-        "landmarkerAsset": "monitoring/pose_landmarker_lite.task",
+        "landmarkerAsset": landmarker_asset,
+        "landmarkerSha256": hashlib.sha256(args.landmarker.read_bytes()).hexdigest(),
         "featureVariant": artifact["feature_variant"],
         "framesPerWindow": int(artifact["frames_per_video"]),
         "featureCount": int(model.n_features_in_),
@@ -92,6 +97,8 @@ def main():
         if "normalization" in artifact and any(artifact["normalization"][key] != metadata[key] for key in artifact["normalization"]):
             raise ValueError("Export normalization does not match training")
         metadata["trainingProtocol"] = "chronological_runtime_windows"
+        if "landmarkerFamily" in template:
+            metadata["landmarkerFamily"] = template["landmarkerFamily"]
     (args.output / "model.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     (args.output / "parity.json").write_text(json.dumps({
         "features": samples.tolist(), "probabilities": actual,

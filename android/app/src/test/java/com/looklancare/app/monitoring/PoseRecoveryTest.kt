@@ -4,6 +4,25 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PoseRecoveryTest {
+  @Test fun skeletonWithoutAnyVisibleJointsCannotBecomeAnObservedPerson() {
+    val points = List(33) { index -> PosePoint(index / 40f, index / 50f, 0f, 0.1f) }
+    assertNull(PoseObservation.create(points, 33, 0.35f))
+  }
+
+  @Test fun invalidVisibilityCannotSupplyEvidenceOfAPerson() {
+    val points = pose().points
+    for (visibility in listOf(-0.1f, 1.1f, Float.NaN)) {
+      assertNull(PoseObservation.create(points.map { it.copy(visibility = visibility) }, points.size, 0.35f))
+    }
+  }
+
+  @Test fun partialOcclusionKeepsActualVisibleJoints() {
+    val points = List(33) { index -> PosePoint(index / 40f, index / 50f, 0f, if (index < 2) 0.8f else 0.1f) }
+    val observed = checkNotNull(PoseObservation.create(points, 33, 0.35f))
+    assertEquals(0.025f, observed.bounds.right, 0.00001f)
+    assertEquals(0.02f, observed.bounds.bottom, 0.00001f)
+  }
+
   private fun pose(offset: Float = 0f, quality: Float = 0.9f, reversed: Boolean = false): PoseObservation {
     val points = List(12) { index ->
       val x = (if (reversed) 11 - index else index).toFloat() / 40 + 0.3f + offset

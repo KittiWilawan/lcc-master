@@ -1,0 +1,40 @@
+{
+  "camera": { "width": 960, "height": 720, "intervalMs": 100, "jpegQuality": 90, "maxPhotoBytes": 2000000 },
+  "quality": { "sampleSize": 96, "minBrightness": 45, "maxBrightness": 225, "minSharpness": 65 },
+  "alignment": { "minWidth": 0.22, "maxWidth": 0.64, "maxHeight": 0.82, "edgeMargin": 0.025, "centerX": 0.5, "centerY": 0.44, "toleranceX": 0.16, "toleranceY": 0.18, "maxPitchDegrees": 18, "maxRollDegrees": 18 },
+  "motion": { "stableMs": 800, "maxFrameGapMs": 450, "lostMs": 1500, "maxCenterJump": 0.18, "blinkOpen": 0.35, "blinkClosed": 0.55, "blinkMinMs": 80, "blinkMaxMs": 1200, "multipleConfirmFrames": 3, "blinkTransitionMs": 300 },
+  "poses": [{ "key": "front", "minYaw": -12, "maxYaw": 12 }, { "key": "left", "minYaw": 18, "maxYaw": 42 }, { "key": "right", "minYaw": -42, "maxYaw": -18 }],
+  "landmarks": { "blinkLeft": "eyeBlinkLeft", "blinkRight": "eyeBlinkRight" },
+  "model": { "asset": "enrollment/face_landmarker.task", "source": "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task", "sha256": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff", "minDetection": 0.6, "minPresence": 0.6, "minTracking": 0.6, "maxFaces": 2 },
+  "features": {
+    "sampleSize": 48,
+    "reference": [108, 337, 151, 9],
+    "eyes": [[33, 133, 159, 145], [362, 263, 386, 374]],
+    "lowerFace": [[98, 327, 168, 2], [61, 291, 0, 17]],
+    "paddingX": 0.2, "paddingY": 0.5, "minHeightToFace": 0.025,
+    "minEyeBrightnessRatio": 0.25, "minLowerBrightnessRatio": 0.3,
+    "minSharpness": 15, "minVisibleEyesFront": 2, "minVisibleEyesSide": 1
+  },
+  "scene": { "tileFraction": 0.333333333, "tileOverlap": 0.25, "mergeIou": 0.25, "mergeCenterRatio": 0.3, "mergeScaleRatio": 0.5, "stopAfterFaces": 2, "verificationScale": 2.0, "duplicateMinIou": 0.75, "duplicateMaxCenterRatio": 0.12, "duplicateMinScaleRatio": 0.85, "duplicateMaxLandmarkRatio": 0.12 },
+  "freshness": { "sampleSize": 32, "maxUnchangedMs": 2000 },
+  "capture": { "facePadding": 0.25 },
+  "ui": { "stalledMs": 6000 },
+  "security": {
+    "threads": 1, "similarityThreshold": 0.45, "anchorFrames": 3,
+    "liveThreshold": 0.8, "liveFrames": 3, "liveMaxGapMs": 450, "liveClass": 1,
+    "identity": {
+      "asset": "enrollment/security/sface.onnx",
+      "sha256": "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+      "size": 112, "input": "data", "outputSize": 128, "channelShifts": [16, 8, 0],
+      "landmarkGroups": [[33, 133], [362, 263], [1], [61], [291]],
+      "template": [[38.2946, 51.6963], [73.5318, 51.5014], [56.0252, 71.7366], [41.5493, 92.3655], [70.7299, 92.2041]],
+      "source": "https://github.com/opencv/opencv_zoo/tree/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_recognition_sface"
+    },
+    "passiveModels": [
+      { "asset": "enrollment/security/minifas-v2.onnx", "sha256": "3be524de424f663182246bb4f9e6e1d049e81a1e24a35d66c9de0564756239d3", "size": 80, "input": "input", "outputSize": 3, "channelShifts": [0, 8, 16], "scale": 2.7 },
+      { "asset": "enrollment/security/minifas-v1se.onnx", "sha256": "6ce8b0d3d6a088b1c37413cb9a13cd582be61c0f937eead491ea971907010cfe", "size": 80, "input": "input", "outputSize": 3, "channelShifts": [0, 8, 16], "scale": 4.0 }
+    ],
+    "passiveSource": "https://github.com/minivision-ai/Silent-Face-Anti-Spoofing/tree/b6d5f04ad78778917853b25c778acef6d5626d15",
+    "challenge": { "turnHoldMs": 250, "returnHoldMs": 250, "timeoutMs": 30000, "minTurnDegrees": 18, "maxTurnDegrees": 30 }
+  }
+}
