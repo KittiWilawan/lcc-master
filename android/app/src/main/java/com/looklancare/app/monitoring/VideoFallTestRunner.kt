@@ -80,7 +80,9 @@ class VideoFallTestRunner(private val context: Context) {
             count++
             if (analysis.getInt("peopleCount") > 0) personFrames++
             if (analysis.getInt("monitoredPeopleCount") > 0) monitoredFrames++
-            if (analysis.getBoolean("fallDetected")) events.put(JSONObject().put("positionMs", position).put("analysis", analysis))
+            for (fall in PersonFallEvents.from(analysis)) {
+              events.put(JSONObject().put("positionMs", position).put("analysis", fall))
+            }
             val compared = analysis.getJSONArray("comparisonEvents")
             for (index in 0 until compared.length()) comparisonEvents.put(compared.getJSONObject(index).put("positionMs", position))
             onFrame(JSONObject().put("id", request.getString("id")).put("positionMs", position).put("durationMs", duration)

@@ -10,6 +10,7 @@
   "turnOffset": 0.18,
   "stableFrames": 2,
   "intervalMs": 400,
+  "analysisTimeoutMs": 30000,
   "previewIntervalMs": 950,
   "previewExpiryMs": 4500,
   "headBoxShoulderRatio": 0.8,

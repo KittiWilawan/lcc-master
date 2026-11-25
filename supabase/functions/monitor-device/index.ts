@@ -181,7 +181,7 @@ async function revokeDevice(service: ReturnType<typeof createClient>, body: Json
 async function deviceConfiguration(service: ReturnType<typeof createClient>, device: { id: string; family_id: string }) {
   const [{ data, error }, { count, error: memberError }] = await Promise.all([
     service.from('cameras')
-      .select('id,name,type,url,protocol,snapshot_url,assigned_member_id,family_members(display_name,is_tracked,user_id,identity_references(storage_path,pose))')
+      .select('id,name,type,url,protocol,snapshot_url,assigned_member_id,family_members(display_name,is_tracked,user_id,identity_consent_at,identity_references(storage_path,pose))')
       .eq('family_id', device.family_id).order('created_at', { ascending: true }),
     service.from('family_members').select('id', { count: 'exact', head: true })
       .eq('family_id', device.family_id).is('user_id', null).eq('is_tracked', true),
@@ -192,7 +192,7 @@ async function deviceConfiguration(service: ReturnType<typeof createClient>, dev
   const signedUrlSeconds = readPositiveInteger('MONITOR_REFERENCE_URL_TTL_SECONDS');
   const cameras = await Promise.all((data ?? []).map(async (camera) => {
     const references = hasTrackedRecipients && camera.family_members?.is_tracked === true &&
-      camera.family_members?.user_id === null
+      camera.family_members?.user_id === null && camera.family_members?.identity_consent_at
       ? camera.family_members?.identity_references ?? [] : [];
     const signedReferences = await Promise.all(references.map(async (reference: { storage_path: string; pose: string }) => {
       const { data: signed } = await service.storage.from('identity-references')
@@ -219,6 +219,7 @@ async function publishDeviceHealth(service: ReturnType<typeof createClient>, dev
   if (deviceError) throw deviceError;
   const { error: healthError } = await service.from('monitor_health').upsert({
     family_id: device.family_id, device_id: device.id, state, detail,
+    ...(typeof body.lastFrameAt === 'string' && Number.isFinite(Date.parse(body.lastFrameAt)) && Date.parse(body.lastFrameAt) <= Date.now() ? { last_frame_at: body.lastFrameAt } : {}),
     camera_count: cameraCount, analyzed_count: analyzedCount, error_count: errorCount, checked_at: now,
   }, { onConflict: 'family_id' });
   if (healthError) throw healthError;
@@ -240,18 +241,28 @@ async function publishDeviceEvent(
   const cameraId = typeof body.cameraId === 'string' ? body.cameraId : '';
   const contentType = body.contentType === 'image/png' ? 'image/png' : 'image/jpeg';
   const image = decodeImage(body.imageBase64, readPositiveInteger('MONITOR_EVENT_IMAGE_MAX_BYTES'));
-  const memberName = typeof body.memberName === 'string' ? body.memberName.slice(0, 300) : 'ยังไม่ยืนยันตัวบุคคล';
   const details = typeof body.details === 'string' ? body.details.slice(0, 1000) : 'AI ตรวจพบเหตุที่อาจล้ม';
-  const { data: camera, error: cameraError } = await service.from('cameras')
-    .select('id,name').eq('id', cameraId).eq('family_id', device.family_id).maybeSingle();
-  if (cameraError || !camera) throw new Error('Camera unavailable');
-
+  const cfg = await deviceConfiguration(service, device);
+  const camera = cfg.cameras.find(item => item.id === cameraId);
+  if (!camera || !body.eventId || typeof body.trackId !== 'string' || typeof body.observedAt !== 'string' ||
+      !Number.isFinite(Date.parse(body.observedAt))) throw new Error('Invalid camera event');
+  const member = camera.family_members;
+  if (cfg.hasTrackedRecipients && (!member?.is_tracked || !member.identity_consent_at || !body.memberId ||
+      body.memberId !== camera.assigned_member_id || body.referenceRevision !== camera.identityReferences.map(ref => ref.storagePath).sort().join('|'))) {
+    throw new Error('Camera monitoring selection changed');
+  }
+  if (!cfg.hasTrackedRecipients && body.memberId) throw new Error('Camera monitoring selection changed');
+  const memberName = cfg.hasTrackedRecipients ? member?.display_name : 'บุคคลที่ตรวจพบ · โหมดตรวจทุกคน';
+  const { data: existing, error: lookupError } = await service.from('fall_events').select('id').eq('id', body.eventId).eq('family_id', device.family_id).maybeSingle();
+  if (lookupError) throw lookupError;
+  if (existing) return { eventId: existing.id };
   const extension = contentType === 'image/png' ? 'png' : 'jpg';
-  const imagePath = `${device.family_id}/${crypto.randomUUID()}.${extension}`;
+  const imagePath = `${device.family_id}/${body.eventId}.${extension}`;
   const { error: uploadError } = await service.storage.from('fall-evidence')
     .upload(imagePath, image, { contentType, upsert: false });
   const deadline = new Date(Date.now() + readPositiveInteger('MONITOR_CANCEL_WINDOW_SECONDS') * 1000);
   const { data: event, error: eventError } = await service.from('fall_events').insert({
+    id: body.eventId, camera_id: cameraId, source_track_id: body.trackId, created_at: body.observedAt,
     family_id: device.family_id,
     member_name: memberName,
     camera_name: camera.name,

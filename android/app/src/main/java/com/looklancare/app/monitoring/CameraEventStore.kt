@@ -95,7 +95,8 @@ class CameraEventStore(context: Context, private val maximum: Int, storageRules:
 
   fun add(camera: JSONObject, analysis: JSONObject, bitmap: Bitmap, notificationSent: Boolean, stillActive: () -> Boolean = { true }): JSONObject = synchronized(guard) {
     check(stillActive()) { "Monitoring scope ended before saving event" }
-    val id = UUID.randomUUID().toString()
+    val id = if (analysis.has("eventId")) UUID.fromString(analysis.getString("eventId")).toString() else UUID.randomUUID().toString()
+    rows("id=?", arrayOf(id)).optJSONObject(0)?.let { return@synchronized it }
     val bytes = ByteArrayOutputStream().use { output ->
       check(bitmap.compress(Bitmap.CompressFormat.JPEG, camera.getInt("jpegQuality"), output)); output.toByteArray()
     }

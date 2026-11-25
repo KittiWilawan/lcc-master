@@ -276,9 +276,8 @@ class LocalPoseAnalyzer(private val context: Context, private val config: Monito
     var maximum = 0.0
     var eligibleCount = 0
     val comparisonEvents = if (compareVideoWeights) JSONArray() else null
-    var alert = false
+    val falls = JSONArray()
     var confirmedCount = 0
-    var fallingIdentity: PersonIdentity? = null
     var suppressedCount = 0
     observations.forEachIndexed { index, observation ->
       val points = observation.points
@@ -352,7 +351,12 @@ class LocalPoseAnalyzer(private val context: Context, private val config: Monito
       if (eligible && visibleEvidence && inScope) eligibleCount++
       if (inScope && visibleEvidence) maximum = maxOf(maximum, probability)
       if (scored && probability >= threshold && !inScope) suppressedCount++
-      if (emitted && inScope) { alert = true; fallingIdentity = person }
+      if (emitted && inScope) falls.put(JSONObject()
+        .put("eventId", java.util.UUID.randomUUID().toString()).put("trackId", track.id)
+        .put("cameraId", cameraId).put("observedAtMs", timestamp).put("confidence", probability)
+        .put("fallingMemberId", person.memberId ?: JSONObject.NULL).put("fallingMemberName", person.name ?: JSONObject.NULL)
+        .put("identityState", person.state).put("faceSimilarity", person.similarity ?: JSONObject.NULL)
+        .put("fallingPersonMatch", if (person.memberId == null) "uncertain" else if (person.state == "recent_face") "possible_target" else "confirmed_target"))
       val collapseConfirmed = confirmedLanding && scored && supported && inScope && track.evidence.collapseConfirmed
       val confirmed = emitted || collapseConfirmed || (confirmedLanding && scored && supported && inScope && probability >= threshold &&
         track.evidence.confirmations >= config.int("confirmations"))
@@ -370,7 +374,9 @@ class LocalPoseAnalyzer(private val context: Context, private val config: Monito
         .put("faceSimilarity", JSONObject.NULL).put("identityState", "uncertain")
       previewBoxes.put(box)
     }
-    return JSONObject().put("recoveryRegions", recoveryRegions).put("status", if (stalled) "uncertain" else if (alert || confirmedCount > 0) "fall"
+    val single = if (falls.length() == 1) falls.getJSONObject(0) else JSONObject()
+    val alert = falls.length() > 0
+    return JSONObject().put("personFalls", falls).put("recoveryRegions", recoveryRegions).put("status", if (stalled) "uncertain" else if (alert || confirmedCount > 0) "fall"
       else if (maximum >= threshold) "possible_fall" else if (eligibleCount > 0) "normal" else "uncertain")
       .apply { if (comparisonEvents != null) put("comparisonEvents", comparisonEvents) }
       .put("confidence", maximum).put("reason", if (stalled) "ภาพไม่เปลี่ยนและอาจค้าง · หยุดยืนยันเหตุจากเฟรมซ้ำ"
@@ -382,11 +388,10 @@ class LocalPoseAnalyzer(private val context: Context, private val config: Monito
       .put("monitoredPeopleCount", boxes.length()).put("monitoringMode", if (scope.allPeople) "all_people" else "selected_people")
       .put("peopleCount", observations.size).put("subjectContinuity", if (observations.size > 1) "multiple_people"
         else if (observations.size == 1 && eligibleCount > 0) "single_continuous_person" else "uncertain")
-      .put("fallingPersonMatch", if (selectedPeople && fallingIdentity?.memberId != null && scope.includes(fallingIdentity?.memberId))
-        if (fallingIdentity?.state == "recent_face") "possible_target" else "confirmed_target" else "uncertain")
-      .put("fallingMemberId", fallingIdentity?.memberId ?: JSONObject.NULL).put("fallingMemberName", fallingIdentity?.name ?: JSONObject.NULL)
-      .put("identityState", fallingIdentity?.state ?: "uncertain").put("identityReady", identityReady)
-      .put("faceSimilarity", fallingIdentity?.similarity ?: JSONObject.NULL).put("detections", boxes).put("previewDetections", previewBoxes).put("fallDetected", alert)
+      .put("fallingPersonMatch", single.optString("fallingPersonMatch", "uncertain"))
+      .put("fallingMemberId", single.opt("fallingMemberId") ?: JSONObject.NULL).put("fallingMemberName", single.opt("fallingMemberName") ?: JSONObject.NULL)
+      .put("identityState", single.optString("identityState", "uncertain")).put("identityReady", identityReady)
+      .put("faceSimilarity", single.opt("faceSimilarity") ?: JSONObject.NULL).put("detections", boxes).put("previewDetections", previewBoxes).put("fallDetected", alert)
       .put("frameStalled", stalled).put("diagnostics", JSONObject().put("rawPoses", candidates.size).put("primaryPoses", primaryCount)
         .put("identityAnalyzed", identityAttempted).put("detectedFaces", faces.size).put("usableFaces", usableFaces)
         .put("recoveryInferences", recoveryInferences).put("distinctFrame", distinctFrame).put("suppressedKnownOther", suppressedCount))

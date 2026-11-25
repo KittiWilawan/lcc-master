@@ -2,6 +2,10 @@ import { supabase } from './supabase';
 import { getTrackedMemberIds } from './monitoringPolicy';
 
 export interface CameraAnalysis {
+  eventId?: string;
+  trackId?: number;
+  cameraId?: string;
+  observedAtMs?: number;
   status: 'normal' | 'possible_fall' | 'fall' | 'uncertain';
   confidence: number;
   reason: string;

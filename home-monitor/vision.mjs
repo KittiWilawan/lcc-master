@@ -22,7 +22,7 @@ function validateAllowedSource(url, config) {
   return parsed;
 }
 
-export async function analyzePoseSequence(images, config) {
+export async function analyzePoseSequence(images, config, references = []) {
   if (!Array.isArray(images) || images.length !== config.poseModelFrames) {
     throw new Error(`ต้องมีภาพต่อเนื่อง ${config.poseModelFrames} ภาพ`);
   }
@@ -32,6 +32,7 @@ export async function analyzePoseSequence(images, config) {
     signal: AbortSignal.timeout(config.poseModelTimeoutMs),
     body: JSON.stringify({
       images: images.map((image) => image.bytes.toString('base64')),
+      references: references.filter(ref => ['front','left','right'].includes(ref.pose)).map(ref => ref.bytes.toString('base64')),
     }),
   });
   if (!response.ok) throw new Error(`โมเดลท่าทางไม่พร้อม (${response.status})`);

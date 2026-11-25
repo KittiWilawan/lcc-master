@@ -28,7 +28,7 @@ class FaceEnrollmentModule(private val context: ReactApplicationContext) : React
       try {
         val config = FaceScanConfig.load(context)
         val limit = config.camera.getInt("maxPhotoBytes")
-        require(retained.size() == config.poses.size - 1 && retained.size() > 0)
+        require(retained.size() in 1 until config.poses.size)
         MonitoringIdentityAnalyzer(context).use { analyzer ->
           fun vector(photo: String): DoubleArray {
             require(photo.isNotEmpty() && photo.length.toLong() <= (limit.toLong() + 2) / 3 * 4)

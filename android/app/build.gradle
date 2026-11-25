@@ -224,7 +224,7 @@ dependencies {
 
 // One configuration source for the native scanner and its TypeScript UI.
 def enrollmentAssets = layout.buildDirectory.dir('generated/faceScanAssets')
-android.sourceSets.main.assets.srcDir(enrollmentAssets)
+android.sourceSets.main.assets.srcDir(enrollmentAssets.get().asFile)
 tasks.register('copyFaceScanConfig', Copy) {
     from "$projectRoot/src/config/faceScan.json"
     into enrollmentAssets.map { it.dir('enrollment') }

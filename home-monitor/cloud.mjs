@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 
 export async function connectFamily(config) {
@@ -19,7 +18,7 @@ export async function connectFamily(config) {
 export async function readCameras(client, familyId) {
   const [{ data, error }, { count, error: memberError }] = await Promise.all([
     client.from('cameras')
-      .select('id,name,type,url,protocol,snapshot_url,assigned_member_id,family_members(display_name,is_tracked,user_id,identity_references(storage_path,pose))')
+      .select('id,name,type,url,protocol,snapshot_url,assigned_member_id,family_members(display_name,is_tracked,user_id,identity_consent_at,identity_references(storage_path,pose))')
       .eq('family_id', familyId)
       .order('created_at', { ascending: true }),
     client.from('family_members').select('id', { count: 'exact', head: true })
@@ -29,7 +28,7 @@ export async function readCameras(client, familyId) {
   if (memberError) throw memberError;
   const cameras = selectMonitoredCameras(data || [], Number(count) > 0);
   return Promise.all(cameras.map(async (camera) => {
-    const references = camera.allPeopleMode ? [] : camera.family_members?.identity_references || [];
+    const references = camera.allPeopleMode || !camera.family_members?.identity_consent_at ? [] : camera.family_members?.identity_references || [];
     return {
       ...camera,
       identityReferenceSignature: references.map((reference) => reference.storage_path).sort().join('|'),
@@ -76,6 +75,7 @@ export async function publishHealth(client, config, health) {
     analyzed_count: health.analyzedCount,
     error_count: health.errorCount,
     detail: health.detail,
+    ...(health.lastFrameAt ? { last_frame_at: health.lastFrameAt } : {}),
     checked_at: new Date().toISOString(),
   }, { onConflict: 'family_id' });
   if (error) throw error;
@@ -154,13 +154,17 @@ export async function finalizeOutstandingFalls(client, config, report) {
 
 export async function publishFall(client, config, camera, image, result, report) {
   const extension = image.contentType === 'image/png' ? 'png' : 'jpg';
-  const imagePath = `${config.familyId}/${randomUUID()}.${extension}`;
+  const { data: existing, error: lookupError } = await client.from('fall_events').select('id').eq('id', result.eventId).eq('family_id', config.familyId).maybeSingle();
+  if (lookupError) throw lookupError;
+  if (existing) return;
+  const imagePath = `${config.familyId}/${result.eventId}.${extension}`;
   const { error: uploadError } = await client.storage.from('fall-evidence')
     .upload(imagePath, image.bytes, { contentType: image.contentType, upsert: false });
   if (uploadError) report(`เก็บภาพหลักฐานของ ${camera.name} ไม่สำเร็จ`, uploadError.message);
   const deadline = new Date(Date.now() + config.cancelWindowMs);
   const attributionLabel = describeEventAttribution(camera, result, config.identityConfidence);
   const { data: event, error: eventError } = await client.from('fall_events').insert({
+    id: result.eventId, created_at: result.observedAt, camera_id: camera.id, source_track_id: result.trackId,
     family_id: config.familyId,
     member_name: attributionLabel,
     camera_name: camera.name,
@@ -177,28 +181,21 @@ export async function publishFall(client, config, camera, image, result, report)
   } catch (error) {
     report('บันทึกเหตุการณ์แล้ว แต่ส่ง Push รอบแรกไม่สำเร็จ', error.message);
   }
-  const remainingMs = Math.max(0, deadline.getTime() - Date.now());
-  if (remainingMs) await new Promise((resolve) => setTimeout(resolve, remainingMs));
-  const finalized = await finalizeFallEvent(client, config, {
-    id: event.id, camera_name: camera.name, member_name: attributionLabel,
-  }, report);
-  if (!finalized) {
-    report('เหตุที่สงสัยว่าล้มถูกยกเลิกหรือรับทราบแล้ว', event.id);
-  }
+
 }
 
 export function describeEventAttribution(camera, result, identityThreshold) {
   if (camera.allPeopleMode) return 'บุคคลที่ตรวจพบ · โหมดตรวจทุกคน';
   const name = camera.family_members?.display_name;
   if (name && result.fallingPersonMatch === 'confirmed_target' &&
-      result.identityConfidence >= identityThreshold) {
+      (result.verifiedByFace || result.identityConfidence >= identityThreshold)) {
     return `AI เปรียบเทียบแล้วว่าอาจเป็น ${name}`;
   }
   return name ? `ยังไม่ยืนยันตัวบุคคล · กำลังเฝ้าดู ${name}` : 'ยังไม่ยืนยันตัวบุคคล';
 }
 
 export function describeEventDetails(result) {
-  const identity = result.fallingPersonMatch === 'confirmed_target'
+  const identity = result.verifiedByFace ? 'เทียบใบหน้ากับภาพอ้างอิงของคนที่เลือกแล้ว' : result.fallingPersonMatch === 'confirmed_target'
     ? `รูปอ้างอิงสอดคล้อง ${Math.round(result.identityConfidence * 100)}%`
     : result.fallingPersonMatch === 'not_target'
       ? 'คนที่เกิดเหตุไม่ตรงกับบุคคลเป้าหมาย'

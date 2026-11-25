@@ -199,10 +199,10 @@ class MonitoringForegroundService : Service() {
           bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, config.int("jpegQuality"), bytes)
           state.put("previewImage", "data:image/jpeg;base64," + Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP))
         }
-        if (result.getBoolean("fallDetected")) {
-          val notificationSent = notifyFall(camera)
+        for (fall in com.looklancare.app.monitoring.PersonFallEvents.from(result)) {
+          val notificationSent = notifyFall(fall.getString("eventId"))
           try {
-            events.add(camera, result, bitmap, notificationSent) { !destroyed && sources[id] === camera &&
+            events.add(camera, fall, bitmap, notificationSent) { !destroyed && sources[id] === camera &&
               MonitoringState.configuredScope == com.looklancare.app.monitoring.MonitorScope(camera.getString("userId"), camera.getString("familyId")) }; saveFailures.remove(id)
             delivery?.requestDrain(); state.put("hasPendingEvent", true)
           } catch (_: Exception) { saveFailures.add(id) }
@@ -217,7 +217,7 @@ class MonitoringForegroundService : Service() {
     MonitoringState.publish(camera.getString("id"), JSONObject().put("cameraId", camera.getString("id")).put("state", state))
   }
 
-  private fun notifyFall(camera: JSONObject): Boolean {
+  private fun notifyFall(eventId: String): Boolean {
     val manager = NotificationManagerCompat.from(this)
     if (!manager.areNotificationsEnabled()) return false
     return try {
@@ -232,7 +232,7 @@ class MonitoringForegroundService : Service() {
         .setContentTitle("พบเหตุที่สงสัยว่าอาจล้ม").setContentText("เปิด LookLanCare เพื่อตรวจสอบภาพและช่วยเหลือ")
         .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setCategory(NotificationCompat.CATEGORY_ALARM)
         .setPriority(NotificationCompat.PRIORITY_HIGH).setContentIntent(intent).setAutoCancel(true).build()
-      manager.notify(camera.getString("id").hashCode().and(Int.MAX_VALUE), notification)
+      manager.notify(eventId, OPEN_APP_REQUEST_CODE, notification)
       true
     } catch (_: Exception) { false }
   }

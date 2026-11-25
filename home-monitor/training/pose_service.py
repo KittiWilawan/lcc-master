@@ -9,6 +9,7 @@ import joblib
 import mediapipe as mp
 import numpy as np
 
+from fall_identity import FallIdentity, face_region
 from benchmark_classifiers import feature_variants
 from train_pose_classifier import empty_frame_features, normalize_landmarks
 
@@ -34,6 +35,7 @@ class PoseFallDetector:
         primary_threshold, multi_threshold,
     ):
         artifact = joblib.load(model_path)
+        self.identity = None
         self.model = artifact["model"]
         self.feature_variant = artifact["feature_variant"]
         self.frames_per_video = int(artifact["frames_per_video"])
@@ -71,6 +73,7 @@ class PoseFallDetector:
         poses = [
             {
                 "features": normalize_landmarks(landmarks),
+                "head": face_region(landmarks),
                 "center": np.mean([[item.x, item.y] for item in landmarks], axis=0),
             }
             for landmarks in result.pose_landmarks
@@ -82,6 +85,8 @@ class PoseFallDetector:
         for frame_index, poses in enumerate(poses_by_frame):
             pairs = []
             for track_index, track in enumerate(tracks):
+                if track["last"] != frame_index - 1:
+                    continue
                 for pose_index, pose in enumerate(poses):
                     distance = float(np.linalg.norm(track["center"] - pose["center"]))
                     if distance <= self.max_tracking_distance:
@@ -91,6 +96,13 @@ class PoseFallDetector:
             for _, track_index, pose_index in sorted(pairs):
                 if track_index in assigned_tracks or pose_index in assigned_poses:
                     continue
+                # Competing assignments break continuity; start fresh tracks for ambiguous people.
+                if any((ti == track_index or pi == pose_index) and (ti, pi) != (track_index, pose_index)
+                       for _, ti, pi in pairs):
+                    continue
+                tracks[track_index]["last"] = frame_index
+                tracks[track_index]["heads"].append(poses[pose_index]["head"])
+                tracks[track_index]["positions"].append(pose_index)
                 tracks[track_index]["frames"].append(poses[pose_index]["features"])
                 tracks[track_index]["center"] = poses[pose_index]["center"]
                 assigned_tracks.add(track_index)
@@ -101,7 +113,9 @@ class PoseFallDetector:
             for pose_index, pose in enumerate(poses):
                 if pose_index not in assigned_poses:
                     tracks.append({
-                        "center": pose["center"],
+                        "center": pose["center"], "last": frame_index,
+                        "heads": [None] * frame_index + [pose["head"]],
+                        "positions": [None] * frame_index + [pose_index],
                         "frames": [empty_frame_features() for _ in range(frame_index)] + [pose["features"]],
                     })
         for track in tracks:
@@ -109,7 +123,7 @@ class PoseFallDetector:
                 track["frames"].append(empty_frame_features())
         return tracks
 
-    def analyze(self, images):
+    def analyze(self, images, references=None):
         if not isinstance(images, list) or len(images) != self.frames_per_video:
             raise ValueError(f"exactly {self.frames_per_video} images are required")
         frame_results = [self.frame_poses(image) for image in images]
@@ -140,7 +154,22 @@ class PoseFallDetector:
         eligible = [item for item in selected_predictions if item[1] >= self.min_track_frames]
         probability, detected = max(eligible, default=(0.0, 0), key=lambda item: item[0])
         status = "uncertain" if not eligible else "fall" if probability >= threshold else "normal"
+        people = []
+        for track, (score, count) in zip(tracks, predictions):
+            if track["last"] != len(images)-1:
+                continue
+            if detector_mode == "primary_person" and count >= self.min_track_frames and len(tracks) == 1:
+                score = primary_probability
+            falling = count >= self.min_track_frames and score >= threshold
+            confirmed = False
+            if falling and references:
+                if self.identity is None:
+                    self.identity = FallIdentity()
+                confirmed = self.identity.matches(references, images, track["heads"])
+            people.append({"positions": track["positions"], "confidence": score,
+                           "falling": falling, "confirmed": confirmed})
         return {
+            "people": people,
             "status": status,
             "confidence": probability,
             "threshold": threshold,
@@ -187,7 +216,7 @@ def build_handler(detector, max_request_bytes):
                 return
             try:
                 payload = json.loads(self.rfile.read(content_length))
-                self.send_json(200, detector.analyze(payload.get("images")))
+                self.send_json(200, detector.analyze(payload.get("images"), payload.get("references")))
             except (ValueError, TypeError, json.JSONDecodeError) as error:
                 self.send_json(400, {"error": str(error)})
             except Exception:

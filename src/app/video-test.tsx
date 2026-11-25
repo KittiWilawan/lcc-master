@@ -114,7 +114,7 @@ export default function VideoTestScreen() {
         <View style={[styles.card, { backgroundColor: colors.card }]}>
           <Text style={[styles.label, { color: colors.textPrimary }]}>{scope ? scope.targetMemberIds.length ? 'เฝ้าระวังเฉพาะคนที่เปิดไว้' : 'ตรวจการล้มของทุกคน' : 'กำลังตรวจขอบเขตการเฝ้าระวัง'}</Text>
           <Text style={[styles.body, { color: colors.textSecondary }]}>{scope?.targetMemberIds.length
-            ? `${scope.names.join(', ')} · คนอื่นหรือคนที่ยืนยันใบหน้าไม่ได้จะไม่มีกรอบและไม่แจ้งเหตุ`
+            ? `${scope.names.join(', ')} · กรอบแสดงทุกคน ระบบจะแจ้งเหตุเฉพาะคนที่ยืนยันได้ว่าตรงกับรายชื่อ`
             : 'เมื่อไม่มีคนที่เปิดเฝ้าระวัง ระบบจะตรวจทุกคนที่มองเห็นในคลิปและกล้อง'}</Text>
           <TouchableOpacity disabled={busy} style={styles.link} onPress={() => router.push('/(tabs)/members')} accessibilityRole="button">
             <Text style={[styles.label, { color: colors.accentText }]}>เลือกคนและตั้งค่ารูปอ้างอิง</Text>
@@ -131,7 +131,7 @@ export default function VideoTestScreen() {
         {!supported && asset && <RealStreamPlayer key={asset.uri} type="video" url={asset.uri} showPeople resizeMode="contain" style={[styles.preview, { height: 240 }]} />}
         {frame ? <View style={[styles.preview, { aspectRatio: frame.frameWidth / frame.frameHeight, backgroundColor: colors.mediaBackground }]}>
           <Image source={{ uri: frame.previewImage }} style={StyleSheet.absoluteFill} contentFit="fill" cachePolicy="none" />
-          <PersonDetectionOverlay detections={frame.analysis.detections ?? []} recoveryRegions={frame.analysis.recoveryRegions} />
+          <PersonDetectionOverlay detections={frame.analysis.previewDetections ?? frame.analysis.detections ?? []} recoveryRegions={frame.analysis.recoveryRegions} />
         </View> : null}
         {frame ? <View style={[styles.card, { backgroundColor: colors.card }]}>
           <Text style={[styles.label, { color: frame.analysis.status === 'fall' ? colors.dangerText : colors.textPrimary }]}>{seconds(frame.positionMs)} / {seconds(frame.durationMs)}</Text>

@@ -6,13 +6,17 @@ import { createRequire } from 'node:module';
 import vm from 'node:vm';
 import ts from 'typescript';
 
-const filename = resolve('src/lib/bodyPose.ts');
-const module = { exports: {} };
-const js = ts.transpileModule(readFileSync(filename, 'utf8'), {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, esModuleInterop: true },
-}).outputText;
-vm.runInNewContext(js, { module, exports: module.exports, require: createRequire(filename) });
-const { inspectBody } = module.exports;
+function load(relative) {
+  const filename = resolve(relative);
+  const module = { exports: {} };
+  const js = ts.transpileModule(readFileSync(filename, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, esModuleInterop: true, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  vm.runInNewContext(js, { module, exports: module.exports, require: createRequire(filename), setTimeout, clearTimeout });
+  return module.exports;
+}
+const { inspectBody } = load('src/lib/bodyPose.ts');
+const { EnrollmentFrameRequest } = load('src/lib/enrollmentFrameRequest.ts');
 
 function person(noseX = 0.5) {
   const points = [['nose',noseX,.22], ['leftEye',.53,.20], ['rightEye',.47,.20],
@@ -38,4 +42,27 @@ test('an obscured or cropped foot and a missing face prevent full-body enrollmen
   const cropped = person();
   cropped.points.find(p => p.part === 'rightAnkle').y = 1;
   assert.equal(inspectBody([cropped], 'front', .75).head, undefined);
+});
+
+test('cancelling a scan releases the capture loop without waiting for inference', async () => {
+  let sent;
+  const requests = new EnrollmentFrameRequest(frame => { sent = frame; });
+  const scan = new AbortController();
+  const done = requests.analyze('image', scan.signal);
+  scan.abort();
+  await assert.rejects(done, /Scan ended/);
+  assert.equal(requests.receive(sent.id, [person()]), false);
+});
+
+test('only the new camera may supply the result after a lens switch', async () => {
+  const frames = [];
+  const requests = new EnrollmentFrameRequest(frame => frames.push(frame));
+  const back = new AbortController();
+  const previous = requests.analyze('back', back.signal);
+  back.abort();
+  const next = requests.analyze('front', new AbortController().signal);
+  assert.equal(requests.receive(frames[0].id, null), false);
+  assert.equal(requests.receive(frames[1].id, []), true);
+  await assert.rejects(previous, /Scan ended/);
+  assert.deepEqual(await next, []);
 });

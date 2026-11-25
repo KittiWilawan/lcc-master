@@ -81,7 +81,9 @@ export async function finalizeDeviceFalls(connection) {
 export async function publishDeviceFall(connection, config, camera, image, result, report) {
   const memberName = describeEventAttribution(camera, result, config.identityConfidence);
   const payload = await request(connection, 'device-event', {
-    cameraId: camera.id,
+    cameraId: camera.id, eventId: result.eventId, trackId: result.trackId, observedAt: result.observedAt,
+    memberId: result.verifiedByFace ? camera.assigned_member_id : null,
+    referenceRevision: camera.identityReferenceSignature,
     contentType: image.contentType,
     imageBase64: image.bytes.toString('base64'),
     memberName,
