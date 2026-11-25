@@ -118,7 +118,7 @@ export default function FamilySetupScreen() {
     } catch (error: unknown) {
       Alert.alert(
         'ดำเนินการไม่สำเร็จ',
-        getFriendlyErrorMessage(error, 'ตรวจสอบอินเทอร์เน็ตแล้วลองอีกครั้ง'),
+        getFriendlyErrorMessage(error, 'ระบบครอบครัวทำรายการไม่สำเร็จ กรุณาลองอีกครั้ง'),
       );
     } finally {
       setLoading(false);

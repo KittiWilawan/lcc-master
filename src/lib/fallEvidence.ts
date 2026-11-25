@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
 import { decode } from 'base64-arraybuffer';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID as uuidv4 } from 'expo-crypto';
 import runtime from '../../android/app/src/main/assets/monitoring/runtime.json';
 import { File } from 'expo-file-system';
 import { retainEvidenceRecords } from './evidenceRetention';

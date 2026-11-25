@@ -61,7 +61,7 @@ export const FullScreenCameraModal = React.memo(function FullScreenCameraModal({
         {onFallDetected || monitoring ? (
           <MonitoredCameraFeed camera={camera} style={styles.fullFeed} monitoring={monitoring} onFallDetected={onFallDetected} />
         ) : (
-          <RealStreamPlayer type={camera.type} url={camera.url} style={styles.fullFeed} />
+          <RealStreamPlayer showPeople snapshotUrl={camera.snapshot_url} type={camera.type} url={camera.url} style={styles.fullFeed} />
         )}
 
         {/* Top Control Header Bar */}

@@ -1,0 +1,18 @@
+{
+  "inputResolution": [321, 257],
+  "imageHeight": 512,
+  "outputStride": 16,
+  "maxPeople": 6,
+  "minPersonScore": 0.30,
+  "minJointScore": 0.42,
+  "minHeight": 0.53,
+  "frameInset": 0.035,
+  "turnOffset": 0.18,
+  "stableFrames": 2,
+  "intervalMs": 400,
+  "previewIntervalMs": 950,
+  "previewExpiryMs": 4500,
+  "headBoxShoulderRatio": 0.8,
+  "maxCenterDrift": 0.09,
+  "jpegQuality": 0.82
+}

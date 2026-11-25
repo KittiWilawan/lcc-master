@@ -25,19 +25,6 @@ export async function listFamilyMembers(familyId: string): Promise<FamilyMember[
   })) as FamilyMember[];
 }
 
-export async function addCareRecipient(familyId: string, name: string, relationship: string) {
-  const { data, error } = await supabase.from('family_members').insert({
-    family_id: familyId,
-    user_id: null,
-    display_name: name,
-    role: relationship || 'ผู้รับการดูแล',
-    is_tracked: true,
-    device_registered: false,
-  }).select('id').single();
-  if (error) throw error;
-  return data.id as string;
-}
-
 export async function updateCareRecipient(memberId: string, name: string, relationship: string) {
   const { error } = await supabase.from('family_members').update({
     display_name: name,

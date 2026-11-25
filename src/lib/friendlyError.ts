@@ -18,6 +18,8 @@ export function getFriendlyErrorMessage(
   const message = typeof details.message === 'string' ? details.message.toLowerCase() : '';
   const code = typeof details.code === 'string' ? details.code.toLowerCase() : '';
 
+  if (code === 'p0429' || message.includes('too many attempts')) return 'ลองรหัสเชิญหลายครั้งแล้ว กรุณารอ 15 นาทีแล้วลองใหม่';
+  if (code === '42702') return 'ระบบครอบครัวต้องอัปเดตฐานข้อมูล กรุณาแจ้งผู้ดูแลระบบ';
   if (details.name === 'TimeoutError' || details.name === 'AbortError') {
     return 'ระบบตอบกลับช้าเกินไป กรุณาลองอีกครั้งเมื่อการเชื่อมต่อพร้อม';
   }

@@ -5,6 +5,7 @@ import { RealStreamPlayer } from './RealStreamPlayer';
 import { PersonDetectionOverlay } from './PersonDetectionOverlay';
 import { Image } from 'expo-image';
 import { hasNativeCameraMonitoring, isCameraMonitorFresh, isCameraMonitorSlow, useCameraMonitorState } from '../lib/cameraMonitoring';
+import previewConfig from '../config/bodyScan.json';
 import { describeMonitoringHealth } from '../lib/monitoringHealth';
 
 interface CameraSource {
@@ -49,6 +50,7 @@ export function MonitoredCameraFeed({
   onFallDetected,
 }: Props) {
   const [cloudAnalysis, setAnalysis] = useState<CameraAnalysis | null>(null);
+  const [cloudFresh, setCloudFresh] = useState(false);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const nativeMode = hasNativeCameraMonitoring() && camera.type !== 'device' && monitoring && process.env.EXPO_PUBLIC_AI_MODE !== 'home_worker';
   const nativeState = useCameraMonitorState(camera.id, nativeMode && displayStream);
@@ -80,6 +82,12 @@ export function MonitoredCameraFeed({
     setError(null);
   }, [camera.id, enabled]);
 
+  useEffect(() => {
+    if (!cloudAnalysis) return;
+    const expiry = setTimeout(() => setCloudFresh(false), previewConfig.previewExpiryMs);
+    return () => clearTimeout(expiry);
+  }, [cloudAnalysis]);
+
   const processImage = useCallback(async (image: string) => {
     if (!enabled || inFlight.current) return;
     inFlight.current = true;
@@ -87,6 +95,7 @@ export function MonitoredCameraFeed({
       const result = await analyzeCameraImages(camera.id, image, previousImage.current);
       previousImage.current = image;
       setAnalysis(result);
+      setCloudFresh(true);
       setError(null);
       const confirmed = result.status === 'fall' && result.confidence >= confidenceThreshold;
       confirmedSamples.current = confirmed ? confirmedSamples.current + 1 : 0;
@@ -97,7 +106,7 @@ export function MonitoredCameraFeed({
       previousImage.current = undefined;
       confirmedSamples.current = 0;
       lastFall.current = false;
-      // Keep the latest boxes visible if one analysis request fails temporarily.
+      setCloudFresh(false);
       setError(caught instanceof Error ? caught.message : 'วิเคราะห์ภาพไม่สำเร็จ');
     } finally {
       inFlight.current = false;
@@ -142,18 +151,21 @@ export function MonitoredCameraFeed({
     camera.type !== 'device' && !camera.snapshot_url ? 'ต้องระบุ URL ภาพนิ่งสำหรับ AI' :
     error || (analysis ? `${analysis.status === 'fall' ? 'สงสัยการล้ม' : analysis.status === 'normal' ? 'ไม่พบเหตุล้ม' : 'กำลังตรวจสอบ'} · ${Math.round(analysis.confidence * 100)}% · ${analysis.subjectContinuity === 'single_continuous_person' ? 'ติดตามคนเดิม' : analysis.subjectContinuity === 'multiple_people' ? 'พบหลายคน' : 'ยังไม่ยืนยันคนเดิม'}` : 'กำลังรับภาพเพื่อตรวจสอบ');
 
+  const previewBoxes = analysis?.previewDetections ?? analysis?.detections ?? [];
   const ratio = nativeState?.frameWidth && nativeState.frameHeight ? nativeState.frameWidth / nativeState.frameHeight : null;
   const frameWidth = ratio && size.height > 0 ? Math.min(size.width, size.height * ratio) : size.width;
   const frameHeight = ratio ? frameWidth / ratio : size.height;
   return (
     <View style={[styles.container, style]} onLayout={(event) => setSize(event.nativeEvent.layout)}>
-      {displayStream && nativeMode ? (
+      {displayStream && nativeMode && nativeFresh && nativeState?.previewImage ? (
         <View style={{ position: 'absolute', width: frameWidth, height: frameHeight, left: (size.width - frameWidth) / 2, top: (size.height - frameHeight) / 2 }}>
           {nativeState?.previewImage ? <Image source={{ uri: nativeState.previewImage }} style={StyleSheet.absoluteFill} contentFit="fill" cachePolicy="none" /> : null}
-          {nativeFresh && analysis && (analysis.detections?.length || analysis.recoveryRegions?.length) ? <PersonDetectionOverlay detections={analysis.detections ?? []} recoveryRegions={analysis.recoveryRegions} /> : null}
+          {nativeFresh && analysis && (previewBoxes.length || analysis.recoveryRegions?.length) ? <PersonDetectionOverlay detections={previewBoxes} recoveryRegions={analysis.recoveryRegions} /> : null}
         </View>
       ) : displayStream ? (
         <RealStreamPlayer
+          showPeople={nativeMode || !cloudFresh || !analysis?.detections?.length}
+          snapshotUrl={camera.snapshot_url}
           type={camera.type}
           url={camera.url}
           style={StyleSheet.absoluteFill}
@@ -162,7 +174,7 @@ export function MonitoredCameraFeed({
           captureQuality={captureQuality || undefined}
         />
       ) : null}
-      {displayStream && !nativeMode && analysis?.detections?.length ? (
+      {displayStream && !nativeMode && cloudFresh && analysis?.detections?.length ? (
         <PersonDetectionOverlay detections={analysis.detections} />
       ) : null}
       {displayStream ? (

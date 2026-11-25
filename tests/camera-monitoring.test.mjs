@@ -226,7 +226,7 @@ test('offline native fall events preserve timestamp, local image and notificatio
   const app = await load('src/lib/fallEvidence.ts', {
     '@react-native-async-storage/async-storage': { getItem: async (key) => storage.get(key) ?? null, setItem: async (key, value) => { storage.set(key, value); } },
     './supabase': { supabase: { storage: { from: () => ({ upload: async () => ({ error: new Error('Offline') }) }) }, from: () => ({ insert: async () => ({ error: new Error('Offline') }), upsert: async () => ({ error: new Error('Offline') }) }) } },
-    'uuid': { v4: () => 'synthetic-id' }, 'expo-file-system': { File: class { async arrayBuffer() { return new ArrayBuffer(1); } } },
+    'expo-crypto': { randomUUID: () => 'synthetic-id' }, 'expo-file-system': { File: class { async arrayBuffer() { return new ArrayBuffer(1); } } },
   }, { fetch: async () => ({ blob: async () => new Blob(['synthetic']) }) });
   const params = { eventId: 'stable-event-id', familyId: 'synthetic-family', createdAt: '2026-10-06T10:00:00.000Z', imageUri: 'file:///private/event.jpg', notificationSent: false };
   const record = await app.recordFallEvent(params);
@@ -247,7 +247,7 @@ test('history includes pending local events and isolates other families when clo
     order: () => query, limit: async () => ({ data: [{ id: 'shared', family_id: 'family-a', created_at: '2026-10-06T10:00:00Z', status: 'responded' }], error: null }) };
   const app = await load('src/lib/fallEvidence.ts', {
     '@react-native-async-storage/async-storage': { getItem: async (key) => key === 'familyId' ? 'family-a' : JSON.stringify(local) },
-    './supabase': { supabase: { from: () => query } }, 'uuid': {}, 'expo-file-system': {},
+    './supabase': { supabase: { from: () => query } }, 'expo-crypto': {}, 'expo-file-system': {},
   });
   const events = await app.getFallEvents();
   assert.deepEqual(Array.from(events, (event) => event.id), ['pending', 'shared']);
@@ -274,7 +274,7 @@ test('native events stay local until native delivery confirms cloud progress', a
   const app = await load('src/lib/fallEvidence.ts', {
     '@react-native-async-storage/async-storage': { getItem: async (key) => storage.get(key) ?? null, setItem: async (key, value) => storage.set(key, value) },
     './supabase': { supabase: { from: () => { throw new Error('Native delivery owns this upload'); } } },
-    'uuid': {}, 'expo-file-system': {},
+    'expo-crypto': {}, 'expo-file-system': {},
   });
   const params = { eventId: 'native-event', familyId: 'test-family', imageUri: 'file:///private/event.jpg', deferCloudSync: true };
   const local = await app.recordFallEvent(params);

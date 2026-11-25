@@ -450,7 +450,10 @@ export default function DashboardScreen() {
 
     // Send OS lock-screen notification through the app.
     void sendLocalSOSNotification();
-    void recordFallEvent({ memberName: currentActivePerson, cameraName: 'ปุ่ม SOS', eventType: 'sos', details: 'ผู้ใช้กดปุ่มขอความช่วยเหลือ' });
+    try {
+      const record = await recordFallEvent({ memberName: currentActivePerson, cameraName: 'ปุ่ม SOS', eventType: 'sos', details: 'ผู้ใช้กดปุ่มขอความช่วยเหลือ' });
+      if (!record.savedLocally && !record.cloudSynced) throw new Error();
+    } catch { Alert.error('บันทึก SOS ในประวัติไม่สำเร็จ', 'ตรวจพื้นที่ว่างและการเชื่อมต่อของมือถือ'); }
   };
 
   const handleInitiateFallAlert = (camName?: string, personName?: string, imageUri?: string) => {
@@ -913,12 +916,12 @@ export default function DashboardScreen() {
             )}
 
             <Text style={{ color: colors.textSecondary, fontSize: 11, lineHeight: 17, marginTop: -5, marginBottom: 13 }}>
-              {allPeopleMode ? 'ต้องการเฝ้าดูเฉพาะคน ให้เลือกคนและสแกนใบหน้าในหน้า “คนที่ดูแล” ก่อน'
+              {allPeopleMode ? 'ต้องการเฝ้าดูเฉพาะคน ให้เลือกคนและสแกนเต็มตัวในหน้า “คนที่ดูแล” ก่อน'
                 : 'กล้องนี้จะเทียบใบหน้ากับคนที่เลือก และแจ้งเหตุเมื่อยืนยันได้ว่าเป็นคนนั้น ดูสถานะการยืนยันในหน้าหลัก'}
             </Text>
 
             </>}
-            <CameraSourceFields type={newCamType} onTypeChange={type => {
+            <CameraSourceFields onPickLocalVideo={() => { setShowAddCameraModal(false); router.push('/video-test'); }} type={newCamType} onTypeChange={type => {
               setNewCamType(type); setCameraTest({ state: 'idle', message: '' });
             }} url={newCamUrl} onUrlChange={value => {
               setNewCamUrl(value); setCameraTest({ state: 'idle', message: '' });

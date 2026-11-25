@@ -17,6 +17,7 @@ export interface CameraAnalysis {
   fallingMemberName?: string | null;
   faceSimilarity?: number | null;
   detections?: PersonDetection[];
+  previewDetections?: PersonDetection[];
   recoveryRegions?: DetectionRegion[];
 }
 

@@ -126,6 +126,7 @@ export default function RootLayout() {
           <Stack.Screen name="profile" />
           <Stack.Screen name="all-cameras" />
           <Stack.Screen name="identity-enrollment" />
+          <Stack.Screen name="body-enrollment" />
           <Stack.Screen name="setup-guide" />
           <Stack.Screen name="video-test" />
         </Stack.Protected>

@@ -29,7 +29,8 @@ export function supportsVideoFallTest() { return typeof native?.start === 'funct
 export function cancelVideoFallTest() { native?.cancel(); }
 export function subscribeVideoFallTest(listener: (frame: VideoTestFrame) => void): () => void {
   if (!native) return () => {};
-  const subscription = new NativeEventEmitter(native as never).addListener('VideoFallTestFrame', (json: string) => {
+  const subscription = new NativeEventEmitter(native as never).addListener('VideoFallTestFrame', (json: unknown) => {
+    if (typeof json !== 'string') return;
     try { listener(JSON.parse(json)); } catch { /* Ignore invalid native events. */ }
   });
   return () => subscription.remove();
@@ -52,7 +53,7 @@ export async function getVideoTestScope(signal: AbortSignal, prepareIdentity = f
     const gallery = await getIdentityGalleryStatus();
     if (gallery.userId !== userId || gallery.familyId !== familyId || !gallery.expiresAt || gallery.expiresAt <= Date.now() ||
         !targetMemberIds.every((id) => gallery.memberIds?.includes(id))) {
-      throw new Error('กรุณาสแกนใบหน้าและยินยอมใช้รูปอ้างอิงให้ครบทุกคนที่เปิดเฝ้าระวัง');
+      throw new Error('กรุณาสแกนเต็มตัวและยินยอมใช้รูปอ้างอิงให้ครบทุกคนที่เปิดเฝ้าระวัง');
     }
   }
   if (!await stillActive()) throw new Error('การทดสอบถูกยกเลิก กรุณาเปิดหน้านี้ใหม่');

@@ -1,3 +1,4 @@
+import { SettingSwitch } from '../components/SettingSwitch';
 import { CareText as Text } from '../components/CareText';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -15,7 +16,6 @@ import {
   ScrollView,
   Share,
   StyleSheet,
-  Switch,
   TextInput,
   TouchableOpacity,
   View
@@ -728,11 +728,9 @@ export default function ProfileScreen() {
                       <Text style={[styles.cardSubtitle, { fontSize: 13, lineHeight: 19 }]}>หน้าหลักเรียบง่าย ตัวอักษรและปุ่มใหญ่ขึ้น</Text>
                     </View>
                   </View>
-                  <Switch
+                  <SettingSwitch
                     value={seniorMode}
                     onValueChange={toggleSeniorMode}
-                    trackColor={{ false: '#94a3b8', true: '#059669' }}
-                    thumbColor="#ffffff"
                     accessibilityLabel="เปิดหรือปิดโหมดผู้สูงอายุ"
                   />
                 </View>
@@ -748,11 +746,9 @@ export default function ProfileScreen() {
                       <Text style={styles.cardSubtitle}>เปลี่ยนธีมแอปเพื่อเปิดใช้งานกลางดึกไม่แสบตา</Text>
                     </View>
                   </View>
-                  <Switch
-                    value={isDarkMode}
+                  <SettingSwitch
+                    accessibilityLabel="โหมดสีเข้ม" value={isDarkMode}
                     onValueChange={toggleDarkMode}
-                    trackColor={{ false: '#cbd5e1', true: '#4f46e5' }}
-                    thumbColor={'#ffffff'}
                   />
                 </View>
 
@@ -767,11 +763,9 @@ export default function ProfileScreen() {
                       <Text style={styles.cardSubtitle}>ถาม PIN 4 หลัก / สแกนนิ้วเมื่อเปิดแอป</Text>
                     </View>
                   </View>
-                  <Switch
-                    value={appLockEnabled}
+                  <SettingSwitch
+                    accessibilityLabel="ล็อกแอปด้วยรหัส" value={appLockEnabled}
                     onValueChange={handleToggleAppLock}
-                    trackColor={{ false: '#cbd5e1', true: '#059669' }}
-                    thumbColor={'#ffffff'}
                   />
                 </View>
 
@@ -806,11 +800,9 @@ export default function ProfileScreen() {
                       <Text style={styles.cardSubtitle}>แจ้งเตือนเมื่อสงสัยว่ามีคนล้ม</Text>
                     </View>
                   </View>
-                  <Switch
-                    value={fallAlerts}
+                  <SettingSwitch
+                    accessibilityLabel="เตือนเมื่อล้ม" value={fallAlerts}
                     onValueChange={setFallAlerts}
-                    trackColor={{ false: '#cbd5e1', true: '#059669' }}
-                    thumbColor={'#ffffff'}
                   />
                 </View>
 
@@ -824,11 +816,9 @@ export default function ProfileScreen() {
                       <Text style={styles.cardSubtitle}>Activity Summaries</Text>
                     </View>
                   </View>
-                  <Switch
-                    value={activitySummary}
+                  <SettingSwitch
+                    accessibilityLabel="สรุปกิจกรรม" value={activitySummary}
                     onValueChange={setActivitySummary}
-                    trackColor={{ false: '#cbd5e1', true: '#059669' }}
-                    thumbColor={'#ffffff'}
                   />
                 </View>
 
@@ -842,11 +832,9 @@ export default function ProfileScreen() {
                       <Text style={styles.cardSubtitle}>Emergency SMS</Text>
                     </View>
                   </View>
-                  <Switch
-                    value={emergencySms}
+                  <SettingSwitch
+                    accessibilityLabel="ข้อความฉุกเฉิน" value={emergencySms}
                     onValueChange={setEmergencySms}
-                    trackColor={{ false: '#cbd5e1', true: '#059669' }}
-                    thumbColor={'#ffffff'}
                   />
                 </View>
               </View>
@@ -993,11 +981,9 @@ export default function ProfileScreen() {
                   <Text style={styles.cardLabel}>ตั้งเป็นรายชื่อหลัก (Primary)</Text>
                   <Text style={styles.cardSubtitle}>ผู้ติดต่ออันดับแรกในกรณีฉุกเฉิน</Text>
                 </View>
-                <Switch
-                  value={contactPrimary}
+                <SettingSwitch
+                  accessibilityLabel="ผู้ติดต่อหลัก" value={contactPrimary}
                   onValueChange={setContactPrimary}
-                  trackColor={{ false: '#cbd5e1', true: '#dc2626' }}
-                  thumbColor={'#ffffff'}
                 />
               </View>
 

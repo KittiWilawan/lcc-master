@@ -56,7 +56,7 @@ export function PersonDetectionOverlay({ detections, recoveryRegions = [] }: Pro
             <View style={[styles.label, { backgroundColor: color }]}>
               <Text style={styles.labelText} numberOfLines={1}>
                 {detection.memberName ? `${detection.identityState === 'recent_face' ? 'ล่าสุดเห็น ' : 'อาจเป็น '}${detection.memberName} · ` : detection.trackId !== undefined ? `คน #${detection.trackId + 1} · ` : ''}
-                {LABELS[detection.state]}{detection.collapseConfirmed ? ' · จากท่าทาง' : ` ${Math.round(detection.confidence * 100)}%`}
+                {detection.monitoringScope === 'known_other' ? 'อยู่นอกกลุ่มที่เลือก' : LABELS[detection.state]}{detection.monitoringScope === 'known_other' ? '' : detection.collapseConfirmed ? ' · จากท่าทาง' : ` ${Math.round(detection.confidence * 100)}%`}
               </Text>
             </View>
           </View>

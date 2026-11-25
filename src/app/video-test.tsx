@@ -1,11 +1,13 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { Image } from 'expo-image';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { v4 as uuid } from 'uuid';
+import { randomUUID as uuid } from 'expo-crypto';
+import { RealStreamPlayer } from '../components/RealStreamPlayer';
 import { PersonDetectionOverlay } from '../components/PersonDetectionOverlay';
 import { useTheme } from '../context/ThemeContext';
 import {
@@ -20,7 +22,7 @@ export default function VideoTestScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-  const [asset, setAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
+  const [asset, setAsset] = useState<{ uri: string; fileName?: string | null } | null>(null);
   const [scope, setScope] = useState<VideoTestScope | null>(null);
   const [frame, setFrame] = useState<VideoTestFrame | null>(null);
   const [result, setResult] = useState<VideoTestResult | null>(null);
@@ -60,6 +62,16 @@ export default function VideoTestScreen() {
       }
       setAsset(selected); setFrame(null); setResult(null); setMessage('');
     } catch { setMessage('เลือกวิดีโอไม่สำเร็จ กรุณาลองอีกครั้ง'); }
+  };
+
+  const pickFile = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({ type: 'video/*', copyToCacheDirectory: true });
+      if (result.canceled) return;
+      const file = result.assets[0];
+      if ((file.size ?? 0) > videoTestLimits.maxFileBytes) { setMessage('ไฟล์ใหญ่เกินขนาดที่รองรับ'); return; }
+      setAsset({ uri: file.uri, fileName: file.name }); setFrame(null); setResult(null); setMessage('');
+    } catch { setMessage('เปิดไฟล์วิดีโอไม่ได้ กรุณาลองเลือกใหม่'); }
   };
 
   const start = async () => {
@@ -108,11 +120,15 @@ export default function VideoTestScreen() {
             <Text style={[styles.label, { color: colors.accentText }]}>เลือกคนและตั้งค่ารูปอ้างอิง</Text>
           </TouchableOpacity>
         </View>
-        {!supported ? <Text style={[styles.body, { color: colors.warningText }]}>ต้องติดตั้ง APK รุ่นใหม่ที่รองรับการทดสอบวิดีโอ ฟังก์ชันนี้ใช้ใน Expo Go ไม่ได้</Text> : null}
-        <TouchableOpacity disabled={busy || !supported} style={[styles.button, { backgroundColor: colors.accent, opacity: busy || !supported ? 0.5 : 1 }]} onPress={() => void pick()} accessibilityRole="button" accessibilityLabel="เลือกวิดีโอจากมือถือ">
+        {!supported ? <Text style={[styles.body, { color: colors.warningText }]}>เครื่องนี้เปิดคลิปและดูกรอบคนได้ การนับเหตุล้มและจับคู่คนที่เลือกในคลิปต้องใช้ APK Android</Text> : null}
+        <TouchableOpacity disabled={busy} style={[styles.button, { backgroundColor: colors.accent, opacity: busy ? 0.5 : 1 }]} onPress={() => void pick()} accessibilityRole="button" accessibilityLabel="เลือกวิดีโอจากมือถือ">
           <Text style={[styles.label, { color: colors.onAccent }]}>{asset ? 'เปลี่ยนวิดีโอ' : 'เลือกวิดีโอจากมือถือ'}</Text>
         </TouchableOpacity>
+        <TouchableOpacity disabled={busy} onPress={() => void pickFile()} style={styles.link} accessibilityRole="button">
+          <Text style={[styles.label, { color: colors.accentText }]}>เลือกจากแอปไฟล์</Text>
+        </TouchableOpacity>
         <Text style={[styles.body, { color: colors.textSecondary }]}>{asset?.fileName ?? `MP4 แนะนำ · ไม่เกิน ${videoTestLimits.maxDurationMs / 60000} นาที / ${videoTestLimits.maxFileBytes / 1024 / 1024} MB`}</Text>
+        {!supported && asset && <RealStreamPlayer key={asset.uri} type="video" url={asset.uri} showPeople resizeMode="contain" style={[styles.preview, { height: 240 }]} />}
         {frame ? <View style={[styles.preview, { aspectRatio: frame.frameWidth / frame.frameHeight, backgroundColor: colors.mediaBackground }]}>
           <Image source={{ uri: frame.previewImage }} style={StyleSheet.absoluteFill} contentFit="fill" cachePolicy="none" />
           <PersonDetectionOverlay detections={frame.analysis.detections ?? []} recoveryRegions={frame.analysis.recoveryRegions} />

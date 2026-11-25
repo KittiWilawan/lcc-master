@@ -1,0 +1,4 @@
+PoseNet MobileNetV1 0.50, output stride 16, 2-byte quantization.
+TensorFlow.js models, Copyright Google LLC. Apache License 2.0.
+Source: https://github.com/tensorflow/tfjs-models/tree/master/posenet
+Weights and graph: https://storage.googleapis.com/tfjs-models/savedmodel/posenet/mobilenet/quant2/050/model-stride16.json

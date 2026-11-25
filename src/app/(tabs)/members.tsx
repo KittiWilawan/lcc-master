@@ -7,16 +7,17 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator, Image, KeyboardAvoidingView, Modal, Platform,
-  ScrollView, StyleSheet, Switch, TextInput, TouchableOpacity, View,
+  ScrollView, StyleSheet, TextInput, TouchableOpacity, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../context/ThemeContext';
 import {
-  addCareRecipient, FamilyMember, listFamilyMembers, removeCareRecipient,
+  FamilyMember, listFamilyMembers, removeCareRecipient,
   setCareRecipientTracking, updateCareRecipient, uploadCareRecipientAvatar, clearCareRecipientSelection,
 } from '../../lib/familyMembers';
 import { getFriendlyErrorMessage } from '../../lib/friendlyError';
 import { supabase } from '../../lib/supabase';
+import { SettingSwitch } from '../../components/SettingSwitch';
 import { SetupReturnButton } from '../../components/SetupReturnButton';
 import readability from '../../config/readability.json';
 import { requestCameraMonitoringRefresh } from '../../lib/cameraMonitoring';
@@ -31,6 +32,7 @@ export default function MembersScreen() {
   const { colors, isDarkMode, seniorMode } = useTheme();
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [familyId, setFamilyId] = useState<string | null>(null);
+  const [ownerId, setOwnerId] = useState<string | null>(null);
   const [isOwner, setIsOwner] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -57,6 +59,7 @@ export default function MembersScreen() {
       ]);
       if (authError) throw authError;
       if (familyError) throw familyError;
+      setOwnerId(family?.owner_id ?? null);
       setIsOwner(Boolean(auth.user && family?.owner_id === auth.user.id));
       setMembers(people);
     } catch (error) {
@@ -91,8 +94,13 @@ export default function MembersScreen() {
     if (!familyId || !isOwner) { Alert.error('ไม่มีสิทธิ์เพิ่มข้อมูล', 'ให้ผู้สร้างครอบครัวเพิ่มผู้ที่ต้องการดูแล'); return; }
     setSaving(true);
     try {
-      const memberId = editing?.id ?? await addCareRecipient(familyId, cleanName, relationship.trim());
-      if (editing) await updateCareRecipient(memberId, cleanName, relationship.trim());
+      if (!editing) {
+        setShowForm(false);
+        router.push({ pathname: '/body-enrollment', params: { familyId, name: cleanName, role: relationship.trim(), setup } });
+        return;
+      }
+      const memberId = editing.id;
+      await updateCareRecipient(memberId, cleanName, relationship.trim());
       if (avatarUri) {
         try { await uploadCareRecipientAvatar(memberId, avatarUri); }
         catch (error) {
@@ -103,10 +111,6 @@ export default function MembersScreen() {
       setShowForm(false);
       requestCameraMonitoringRefresh();
       await refresh();
-      if (!editing) Alert.confirm('เพิ่มคนที่เฝ้าดูแล้ว', 'ขั้นตอนถัดไปคือสแกนใบหน้า เพื่อให้ AI ยืนยันได้ว่าเป็นคนนี้ รูปโปรไฟล์อย่างเดียวใช้ยืนยันไม่ได้', [
-        { text: 'ทำภายหลัง', style: 'cancel' },
-        { text: 'สแกนใบหน้าต่อ', onPress: () => router.push({ pathname: '/identity-enrollment', params: { memberId, memberName: cleanName, setup } }) },
-      ]);
     } catch (error) {
       Alert.error('บันทึกไม่สำเร็จ', getFriendlyErrorMessage(error));
     } finally { setSaving(false); }
@@ -202,7 +206,7 @@ export default function MembersScreen() {
           <MaterialCommunityIcons name="account-search-outline" size={20} color={colors.textMuted} />
         </View>
         <View style={[styles.identityCopy, seniorMode && { minWidth: 140 }]}>
-          <Text style={[styles.identityTitle, { color: colors.textPrimary }]}>รูปใบหน้าสำหรับยืนยันบุคคล</Text>
+          <Text style={[styles.identityTitle, { color: colors.textPrimary }]}>ข้อมูลสแกนสำหรับยืนยันบุคคล</Text>
           <Text style={[styles.identityHint, { color: colors.textSecondary }]}>
             {`มีรูปอ้างอิง ${member.identity_reference_count} รูป · ตรวจความพร้อมจับคู่ในหน้าตั้งค่า`}
           </Text>
@@ -220,9 +224,9 @@ export default function MembersScreen() {
           <Text style={[styles.toggleTitle, { color: colors.textPrimary }]}>เฝ้าดูคนนี้</Text>
           <Text style={[styles.toggleHint, { color: colors.textSecondary }]}>แจ้งเหตุเมื่อยืนยันใบหน้าได้ · ต้องเชื่อมกล้องด้วย</Text>
         </View>
-        <View style={{ minHeight: readability.touchTargetSize, justifyContent: 'center', paddingHorizontal: 4 }}><Switch value={member.is_tracked}
+        <View style={{ minHeight: readability.touchTargetSize, justifyContent: 'center', paddingHorizontal: 4 }}><SettingSwitch value={member.is_tracked}
           accessibilityLabel={`เฝ้าดู ${member.display_name}`} onValueChange={() => void toggleTracking(member)} disabled={!isOwner || trackingBusy}
-          trackColor={{ false: colors.cardBorder, true: '#91D7BC' }} thumbColor={member.is_tracked ? emerald : '#CBD5D1'} /></View>
+          /></View>
       </View>
       {isOwner && <View style={styles.actions}>
         <TouchableOpacity style={[styles.actionButton, { borderColor: colors.cardBorder }]} onPress={() => openForm(member)}>
@@ -251,7 +255,7 @@ export default function MembersScreen() {
         <Text style={{ color: colors.textPrimary, fontWeight: '800' }}>ตั้งค่าให้เฝ้าดูใคร</Text>
         <Text style={{ color: colors.textSecondary, marginTop: 6 }}>{trackedCount
           ? `เฉพาะคนที่เปิดไว้ ${trackedCount} คน · ถ้ายืนยันใบหน้าไม่ได้ จะไม่แจ้งเหตุจากคนนั้น`
-          : 'ทุกคนในภาพ · ไม่ต้องสแกนใบหน้า และไม่ระบุชื่อ'}</Text>
+          : 'ทุกคนในภาพ · ไม่ต้องสแกนเต็มตัว และไม่ระบุชื่อ'}</Text>
         {isOwner && trackedCount > 0 && <TouchableOpacity onPress={chooseAllPeople} disabled={trackingBusy} accessibilityRole="button"
           style={{ minHeight: readability.touchTargetSize, justifyContent: 'center' }}>
           <Text style={{ color: colors.accentText, fontWeight: '800' }}>เปลี่ยนเป็นตรวจทุกคนในภาพ</Text>
@@ -261,7 +265,7 @@ export default function MembersScreen() {
       {!seniorMode && <View style={styles.hero}>
         <View style={styles.heroIcon}><MaterialCommunityIcons name="home-heart" size={28} color="#FFFFFF" /></View>
         <Text style={styles.heroTitle}>ดูแลได้ แม้ท่านไม่มีมือถือ</Text>
-        <Text style={styles.heroBody}>เพิ่มชื่อ สแกนใบหน้า แล้วเปิด “เฝ้าดูคนนี้” ผู้ดูแลที่มีบัญชีจะเป็นคนรับแจ้งเตือน</Text>
+        <Text style={styles.heroBody}>เพิ่มชื่อ สแกนเต็มตัว แล้วเปิด “เฝ้าดูคนนี้” ผู้ดูแลที่มีบัญชีจะเป็นคนรับแจ้งเตือน</Text>
         <View style={styles.heroStats}>
           <View><Text style={styles.statNumber}>{recipients.length}</Text><Text style={styles.statLabel}>ผู้รับการดูแล</Text></View>
           <View style={styles.statSeparator} />
@@ -309,7 +313,16 @@ export default function MembersScreen() {
         {caregivers.length ? caregivers.map((member, index) => <View key={member.id} style={[styles.caregiverRow, index > 0 && { borderTopWidth: 1, borderTopColor: colors.separator }]}>
           <View style={[styles.smallAvatar, { backgroundColor: colors.accentBg }]}><MaterialCommunityIcons name="account-check-outline" size={21} color={colors.accentText} /></View>
           <View style={styles.personDetails}><Text style={[styles.caregiverName, { color: colors.textPrimary }]}>{member.display_name}</Text>
-            <Text style={{ color: colors.textSecondary, fontSize: 12 }}>{member.role || 'ผู้ดูแล'}</Text></View>
+            <Text style={{ color: colors.textSecondary, fontSize: 12 }}>{member.user_id === ownerId ? 'ผู้สร้างครอบครัว' : member.role || 'ผู้ดูแล'}</Text></View>
+          {isOwner && member.user_id !== ownerId && <TouchableOpacity accessibilityRole="button"
+            accessibilityLabel={`นำ ${member.display_name} ออกจากครอบครัว`} style={{ minHeight: readability.touchTargetSize, justifyContent: 'center' }}
+            onPress={() => Alert.confirm('นำสมาชิกออกจากครอบครัว?', `${member.display_name} จะหมดสิทธิ์ดูข้อมูลและรับแจ้งเตือนของครอบครัวนี้`, [
+              { text: 'ยกเลิก', style: 'cancel' }, { text: 'นำออก', style: 'destructive', onPress: async () => {
+                const { error } = await supabase.rpc('remove_family_caregiver', { p_family: familyId, p_member: member.id });
+                if (error) Alert.error('นำสมาชิกออกไม่สำเร็จ', getFriendlyErrorMessage(error));
+                await refresh();
+              } },
+            ])}><Text style={{ color: colors.dangerText, fontWeight: '700' }}>นำออก</Text></TouchableOpacity>}
           <MaterialCommunityIcons name="check-circle" size={19} color={colors.accentText} />
         </View>) : <Text style={[styles.emptyBody, { color: colors.textSecondary }]}>ยังไม่มีบัญชีผู้ดูแลในครอบครัวนี้</Text>}
       </View>
@@ -331,20 +344,20 @@ export default function MembersScreen() {
             <TouchableOpacity onPress={() => setShowForm(false)} accessibilityLabel="ปิด"><MaterialCommunityIcons name="close" size={23} color={colors.textSecondary} /></TouchableOpacity>
           </View>
           <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-            <TouchableOpacity style={[styles.photoPicker, { backgroundColor: colors.accentBg, borderColor: colors.accentText }]} onPress={() => void chooseAvatar()}>
+            {editing && <><TouchableOpacity style={[styles.photoPicker, { backgroundColor: colors.accentBg, borderColor: colors.accentText }]} onPress={() => void chooseAvatar()}>
               {avatarUri || editing?.avatar_url ? <Image source={{ uri: avatarUri || editing?.avatar_url || '' }} style={styles.photoPreview} />
                 : <MaterialCommunityIcons name="camera-plus-outline" size={32} color={colors.accentText} />}
             </TouchableOpacity>
-            <Text style={[styles.photoCaption, { color: colors.textSecondary }]}>เพิ่มรูปได้ภายหลัง · ไม่จำเป็นต่อการบันทึก</Text>
+            <Text style={[styles.photoCaption, { color: colors.textSecondary }]}>เพิ่มรูปได้ภายหลัง · ไม่จำเป็นต่อการบันทึก</Text></>}
             <Text style={[styles.fieldLabel, { color: colors.textPrimary }]}>ชื่อที่เรียก <Text style={{ color: '#B94747' }}>*</Text></Text>
             <TextInput style={[styles.input, { backgroundColor: colors.inputBg, borderColor: colors.cardBorder, color: colors.textPrimary }]}
               placeholder="เช่น คุณยายสมใจ" placeholderTextColor={colors.textMuted} value={name} onChangeText={setName} autoCapitalize="words" maxLength={80} />
             <Text style={[styles.fieldLabel, { color: colors.textPrimary }]}>ความสัมพันธ์ (ไม่บังคับ)</Text>
             <TextInput style={[styles.input, { backgroundColor: colors.inputBg, borderColor: colors.cardBorder, color: colors.textPrimary }]}
               placeholder="เช่น คุณยาย" placeholderTextColor={colors.textMuted} value={relationship} onChangeText={setRelationship} maxLength={60} />
-            <Text style={[styles.formHint, { color: colors.textSecondary }]}>หลังบันทึก ไปหน้าหลักเพื่อผูกกล้องกับท่าน การแจ้งเตือนจะส่งไปยังมือถือของผู้ดูแล</Text>
+            <Text style={[styles.formHint, { color: colors.textSecondary }]}>{editing ? 'บันทึกชื่อที่ต้องการแสดงในครอบครัว' : 'แอปจะเพิ่มชื่อนี้หลังได้รับความยินยอมและสแกนเต็มตัวสำเร็จ'}</Text>
             <TouchableOpacity style={[styles.saveButton, saving && { opacity: 0.65 }]} onPress={() => void save()} disabled={saving}>
-              {saving ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.saveButtonText}>{editing ? 'บันทึกการแก้ไข' : 'เพิ่มผู้รับการดูแล'}</Text>}
+              {saving ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.saveButtonText}>{editing ? 'บันทึกการแก้ไข' : 'ถัดไป · สแกนเต็มตัว'}</Text>}
             </TouchableOpacity>
           </ScrollView>
         </View>

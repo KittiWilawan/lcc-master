@@ -272,6 +272,7 @@ class LocalPoseAnalyzer(private val context: Context, private val config: Monito
     history.tracks.keys.retainAll(history.associator.activeIds)
     history.tracks.values.forEach { it.evidence.expire(timestamp) }
     val boxes = JSONArray()
+    val previewBoxes = JSONArray()
     var maximum = 0.0
     var eligibleCount = 0
     val comparisonEvents = if (compareVideoWeights) JSONArray() else null
@@ -356,14 +357,18 @@ class LocalPoseAnalyzer(private val context: Context, private val config: Monito
       val confirmed = emitted || collapseConfirmed || (confirmedLanding && scored && supported && inScope && probability >= threshold &&
         track.evidence.confirmations >= config.int("confirmations"))
       if (confirmed) confirmedCount++
-      if (inScope) boxes.put(JSONObject().put("label", "person").put("trackId", track.id)
+      val box = JSONObject().put("label", "person").put("trackId", track.id)
         .put("state", if (stalled || !visibleEvidence) "uncertain" else if (confirmed) "fall" else if (eligible && probability >= threshold) "possible_fall" else if (eligible) "normal" else "uncertain")
         .put("collapseConfirmed", collapseConfirmed)
         .put("confidence", if (!confirmed && eligible && probability < threshold) 1.0 - probability else probability).put("x", bounds.left.toDouble()).put("y", bounds.top.toDouble())
         .put("width", (bounds.right - bounds.left).toDouble()).put("height", (bounds.bottom - bounds.top).toDouble())
         .put("identityState", person.state).put("memberId", person.memberId ?: JSONObject.NULL)
         .put("memberName", person.name ?: JSONObject.NULL).put("faceSimilarity", person.similarity ?: JSONObject.NULL)
-        .put("monitoringScope", if (inScope) "included" else "known_other"))
+        .put("monitoringScope", if (inScope) "included" else "known_other")
+      if (inScope) boxes.put(box)
+      else box.put("state", "uncertain").put("memberId", JSONObject.NULL).put("memberName", JSONObject.NULL)
+        .put("faceSimilarity", JSONObject.NULL).put("identityState", "uncertain")
+      previewBoxes.put(box)
     }
     return JSONObject().put("recoveryRegions", recoveryRegions).put("status", if (stalled) "uncertain" else if (alert || confirmedCount > 0) "fall"
       else if (maximum >= threshold) "possible_fall" else if (eligibleCount > 0) "normal" else "uncertain")
@@ -381,7 +386,7 @@ class LocalPoseAnalyzer(private val context: Context, private val config: Monito
         if (fallingIdentity?.state == "recent_face") "possible_target" else "confirmed_target" else "uncertain")
       .put("fallingMemberId", fallingIdentity?.memberId ?: JSONObject.NULL).put("fallingMemberName", fallingIdentity?.name ?: JSONObject.NULL)
       .put("identityState", fallingIdentity?.state ?: "uncertain").put("identityReady", identityReady)
-      .put("faceSimilarity", fallingIdentity?.similarity ?: JSONObject.NULL).put("detections", boxes).put("fallDetected", alert)
+      .put("faceSimilarity", fallingIdentity?.similarity ?: JSONObject.NULL).put("detections", boxes).put("previewDetections", previewBoxes).put("fallDetected", alert)
       .put("frameStalled", stalled).put("diagnostics", JSONObject().put("rawPoses", candidates.size).put("primaryPoses", primaryCount)
         .put("identityAnalyzed", identityAttempted).put("detectedFaces", faces.size).put("usableFaces", usableFaces)
         .put("recoveryInferences", recoveryInferences).put("distinctFrame", distinctFrame).put("suppressedKnownOther", suppressedCount))

@@ -47,12 +47,12 @@ export default function TabLayout() {
         name="home"
         options={{
           title: 'หน้าหลัก',
-          tabBarIcon: ({ color, focused }) => (
+          tabBarIcon: ({ focused }) => (
             <View style={[styles.iconContainer, focused && { backgroundColor: isDarkMode ? '#064e3b' : '#ecfdf5' }]}>
               <MaterialCommunityIcons 
                 name={focused ? "home" : "home-outline"} 
                 size={seniorMode ? 28 : 24} 
-                color={color} 
+                color={focused ? colors.accentText : colors.textMuted}
               />
             </View>
           ),
@@ -63,12 +63,12 @@ export default function TabLayout() {
         options={{
           title: 'ประวัติ',
           href: seniorMode ? null : undefined,
-          tabBarIcon: ({ color, focused }) => (
+          tabBarIcon: ({ focused }) => (
             <View style={[styles.iconContainer, focused && { backgroundColor: isDarkMode ? '#064e3b' : '#ecfdf5' }]}>
               <MaterialCommunityIcons 
                 name={focused ? "clock" : "clock-outline"} 
                 size={seniorMode ? 28 : 24} 
-                color={color} 
+                color={focused ? colors.accentText : colors.textMuted}
               />
             </View>
           ),
@@ -78,12 +78,12 @@ export default function TabLayout() {
         name="members"
         options={{
           title: 'คนที่ดูแล',
-          tabBarIcon: ({ color, focused }) => (
+          tabBarIcon: ({ focused }) => (
             <View style={[styles.iconContainer, focused && { backgroundColor: isDarkMode ? '#064e3b' : '#ecfdf5' }]}>
               <MaterialCommunityIcons 
                 name={focused ? "account-group" : "account-group-outline"} 
                 size={seniorMode ? 28 : 24} 
-                color={color} 
+                color={focused ? colors.accentText : colors.textMuted}
               />
             </View>
           ),
@@ -93,12 +93,12 @@ export default function TabLayout() {
         name="alerts"
         options={{
           title: 'แจ้งเตือน',
-          tabBarIcon: ({ color, focused }) => (
+          tabBarIcon: ({ focused }) => (
             <View style={[styles.iconContainer, focused && { backgroundColor: isDarkMode ? '#064e3b' : '#ecfdf5' }]}>
               <MaterialCommunityIcons 
                 name={focused ? "bell" : "bell-outline"} 
                 size={seniorMode ? 28 : 24} 
-                color={color} 
+                color={focused ? colors.accentText : colors.textMuted}
               />
             </View>
           ),
@@ -109,12 +109,12 @@ export default function TabLayout() {
         options={{
           title: 'สถิติ',
           href: seniorMode ? null : undefined,
-          tabBarIcon: ({ color, focused }) => (
+          tabBarIcon: ({ focused }) => (
             <View style={[styles.iconContainer, focused && { backgroundColor: isDarkMode ? '#064e3b' : '#ecfdf5' }]}>
               <MaterialCommunityIcons 
                 name={focused ? "chart-line" : "chart-line-variant"} 
                 size={seniorMode ? 28 : 24} 
-                color={color} 
+                color={focused ? colors.accentText : colors.textMuted}
               />
             </View>
           ),

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   StyleSheet,
@@ -14,6 +14,10 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { parseStreamUrl } from '../lib/streamSource';
 
+import { File } from 'expo-file-system';
+import { LivePersonBoxes, type PreviewSample } from './LivePersonBoxes';
+import bodyConfig from '../config/bodyScan.json';
+
 export type StreamResizeMode = 'cover' | 'contain' | 'fill';
 
 interface RealStreamPlayerProps {
@@ -24,6 +28,8 @@ interface RealStreamPlayerProps {
   isMuted?: boolean;
   shouldPlay?: boolean;
   onPlaybackError?: (error: string) => void;
+  showPeople?: boolean;
+  snapshotUrl?: string;
   onFrame?: (base64: string) => void | Promise<void>;
   frameIntervalMs?: number;
   captureQuality?: number;
@@ -37,6 +43,8 @@ export const RealStreamPlayer = React.memo(function RealStreamPlayer({
   isMuted = true,
   shouldPlay = true,
   onPlaybackError,
+  showPeople = false,
+  snapshotUrl,
   onFrame,
   frameIntervalMs,
   captureQuality,
@@ -56,7 +64,8 @@ export const RealStreamPlayer = React.memo(function RealStreamPlayer({
       capturing.current = true;
       try {
         const picture = await cameraRef.current.takePictureAsync({ base64: true, quality: captureQuality });
-        if (picture?.base64) await onFrame(picture.base64);
+        try { if (picture?.base64) await onFrame(picture.base64); }
+        finally { if (picture?.uri?.startsWith('file:')) { try { new File(picture.uri).delete(); } catch {} } }
       } catch (caught) {
         onPlaybackError?.(caught instanceof Error ? caught.message : 'ไม่สามารถจับภาพจากกล้องได้');
       } finally {
@@ -148,6 +157,37 @@ export const RealStreamPlayer = React.memo(function RealStreamPlayer({
     }
   };
 
+  const capturePreview = useCallback(async (): Promise<PreviewSample | undefined> => {
+    if (type === 'device') {
+      if (!cameraReady || !cameraRef.current || capturing.current) return;
+      capturing.current = true;
+      try {
+        const picture = await cameraRef.current.takePictureAsync({ quality: bodyConfig.jpegQuality, shutterSound: false });
+        if (picture) return { source: picture.uri, release: () => { if (picture.uri.startsWith('file:')) { try { new File(picture.uri).delete(); } catch {} } } };
+      } finally { capturing.current = false; }
+      return;
+    }
+    if (!player || player.status !== 'readyToPlay') return;
+    try {
+      const [image] = await player.generateThumbnailsAsync(player.currentTime, { maxHeight: bodyConfig.imageHeight });
+      if (!image) throw new Error();
+      return { source: image, release: () => image.release() };
+    } catch (error) {
+      if (!snapshotUrl) throw error;
+      const response = await fetch(snapshotUrl, { cache: 'no-store' });
+      if (!response.ok) throw error;
+      const blob = await response.blob();
+      const source = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = reject;
+        reader.onload = () => resolve(String(reader.result));
+        reader.readAsDataURL(blob);
+      });
+      return { source };
+    }
+  }, [type, cameraReady, player, snapshotUrl]);
+  const overlay = showPeople && Platform.OS !== 'web' ? <LivePersonBoxes capture={capturePreview} fit={resizeMode} /> : null;
+
   // Local Device Camera
   if (type === 'device') {
     if (!cameraPermission?.granted) {
@@ -168,6 +208,7 @@ export const RealStreamPlayer = React.memo(function RealStreamPlayer({
           facing="back"
           onCameraReady={() => { setLoading(false); setCameraReady(true); }}
         />
+        {overlay}
       </View>
     );
   }
@@ -259,6 +300,7 @@ export const RealStreamPlayer = React.memo(function RealStreamPlayer({
         <VideoView
           style={styles.fullMedia}
           player={player}
+          surfaceType="textureView"
           contentFit={contentFitMode}
           nativeControls={false}
         />
@@ -268,6 +310,7 @@ export const RealStreamPlayer = React.memo(function RealStreamPlayer({
           <Text style={styles.emptyText}>ไม่มี URL กล้องวงจรปิด</Text>
         </View>
       )}
+      {overlay}
     </View>
   );
 });

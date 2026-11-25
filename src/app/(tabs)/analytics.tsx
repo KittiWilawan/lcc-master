@@ -4,7 +4,7 @@ import { useTheme, type ThemeColors } from '../../context/ThemeContext';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import {
   ScrollView,
   StyleSheet,
@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../../lib/supabase';
-import { getFallEvents } from '../../lib/fallEvidence';
+import { getFallEvents, recordFallEvent } from '../../lib/fallEvidence';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 
@@ -41,10 +41,13 @@ export default function AnalyticsScreen() {
   const [userProfile, setUserProfile] = useState<any>(null);
   const [activeMemberName, setActiveMemberName] = useState('ผู้รับการดูแลทั้งหมด');
 
+  const reads = useRef(0);
   const loadData = useCallback(async () => {
+    const currentRead = ++reads.current;
     try {
       // Pull from Supabase fall_events (with local fallback)
       const cloudEvents = await getFallEvents();
+      if (currentRead !== reads.current) return;
       if (cloudEvents && cloudEvents.length > 0) {
         setEvents(
           cloudEvents.map((e) => ({
@@ -89,8 +92,27 @@ export default function AnalyticsScreen() {
   useFocusEffect(
     useCallback(() => {
       void loadData();
+      return () => { ++reads.current; };
     }, [loadData])
   );
+
+  const simulationPending = useRef(false);
+  const [simulating, setSimulating] = useState(false);
+  const [simulationStatus, setSimulationStatus] = useState('');
+  const simulateSOS = async () => {
+    if (simulationPending.current) return;
+    simulationPending.current = true;
+    setSimulating(true);
+    try {
+      const familyId = await AsyncStorage.getItem('familyId');
+      if (!familyId) { setSimulationStatus('กรุณาเลือกครอบครัวก่อนจำลอง SOS'); return; }
+      const event = await recordFallEvent({ familyId, eventType: 'simulated', cameraName: 'ทดสอบ SOS', details: 'จำลอง SOS จากหน้าสถิติ' });
+      if (!event.savedLocally && !event.cloudSynced) throw new Error();
+      await loadData();
+      setSimulationStatus(event.cloudSynced ? 'บันทึกแล้ว ดูได้ที่เหตุจำลองและประวัติ' : 'บันทึกเหตุจำลองในมือถือแล้ว');
+    } catch { setSimulationStatus('บันทึกเหตุจำลองไม่สำเร็จ กรุณาลองอีกครั้ง'); }
+    finally { simulationPending.current = false; setSimulating(false); }
+  };
 
   // Compute 7-day stats
   const weeklyData = useMemo(() => {
@@ -309,6 +331,12 @@ export default function AnalyticsScreen() {
           </View>
         </View>
 
+        <TouchableOpacity accessibilityRole="button" disabled={simulating} onPress={() => void simulateSOS()}
+          style={[styles.card, { minHeight: 48 }]}>
+          <Text style={{ color: colors.accentText, fontWeight: '700' }}>{simulating ? 'กำลังบันทึก…' : 'จำลอง SOS'}</Text>
+          <Text style={{ color: colors.textSecondary }}>เพิ่มในสถิติและประวัติ โดยไม่ส่งสัญญาณฉุกเฉิน</Text>
+        </TouchableOpacity>
+        {!!simulationStatus && <Text accessibilityLiveRegion="polite" style={{ color: colors.textPrimary }}>{simulationStatus}</Text>}
         {/* Weekly Fall Events Bar Chart */}
         <View style={styles.card}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 12 }}>

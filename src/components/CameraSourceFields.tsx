@@ -16,6 +16,7 @@ interface Props {
   onSnapshotChange: (value: string) => void;
   homeWorkerMode: boolean;
   test: { state: 'idle' | 'testing' | 'success' | 'error'; message: string; source?: string };
+  onPickLocalVideo: () => void;
   onTest: () => void;
   saving: boolean;
 }
@@ -67,6 +68,11 @@ export function CameraSourceFields(props: Props) {
       <Text style={{ color: colors.textSecondary }}>{props.homeWorkerMode
         ? 'คอมที่เชื่อมไว้จะรับภาพมาวิเคราะห์ ตรวจการเชื่อมต่อก่อนบันทึก'
         : 'ใช้ลิงก์เดียวได้ใน APK Android ไม่ต้องกรอกลิงก์ภาพนิ่งเพิ่ม'}</Text>
+      {props.type === 'video' && <TouchableOpacity disabled={busy} onPress={props.onPickLocalVideo} accessibilityRole="button"
+        style={[styles.option, { minHeight: minimumHeight, borderColor: colors.accentText, backgroundColor: colors.accentBg }]}>
+        <MaterialCommunityIcons name="folder-play-outline" size={24} color={colors.accentText} />
+        <Text style={[styles.flexLabel, { color: colors.accentText }]}>ทดสอบด้วยไฟล์วิดีโอในมือถือ</Text>
+      </TouchableOpacity>}
       <TouchableOpacity onPress={() => setShowHelp(value => !value)} accessibilityRole="button" accessibilityState={{ expanded: showHelp }}
         testID="camera-link-help-toggle" style={[styles.disclosure, { minHeight: minimumHeight }]}>
         <Text style={[styles.flexLabel, { color: colors.accentText }]}>ลิงก์นี้หาจากไหน?</Text>

@@ -2,10 +2,9 @@ import { CareText as Text } from '../components/CareText';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { hasNativeCameraMonitoring, supportsMonitoringIdentity, requestCameraMonitoringRefresh } from '../lib/cameraMonitoring';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as ImagePicker from 'expo-image-picker';
 import { Image } from 'expo-image';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   ActivityIndicator, ScrollView, StyleSheet, TouchableOpacity, View,
 } from 'react-native';
@@ -13,15 +12,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../context/ThemeContext';
 import {
   confirmIdentityConsent, deleteIdentityReference, IDENTITY_POSES, IdentityPose,
-  IdentityReference, listIdentityReferences, saveIdentityReference, saveIdentityReferenceSet, withdrawIdentityConsent,
+  IdentityReference, listIdentityReferences, withdrawIdentityConsent,
 } from '../lib/identityReferences';
 import { getFriendlyErrorMessage } from '../lib/friendlyError';
 import { supabase } from '../lib/supabase';
-import { prepareIdentityImage } from '../lib/identityImageProcessing';
 import { AppAlert as Alert } from '../lib/appAlert';
-import { FaceCaptureModal } from '../components/FaceCaptureModal';
-import { FacePhotoError, supportsFaceInspection, validateFacePhoto } from '../lib/faceInspection';
-import { supportsGuidedFaceScan, type FaceScanTarget } from '../lib/guidedFaceScan';
 import { SetupReturnButton } from '../components/SetupReturnButton';
 import readability from '../config/readability.json';
 import identityConfig from '../../android/app/src/main/assets/monitoring/identity.json';
@@ -35,7 +30,7 @@ function firstParam(value: string | string[] | undefined): string {
 export default function IdentityEnrollmentScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { colors, seniorMode } = useTheme();
+  const { colors } = useTheme();
   const params = useLocalSearchParams<{ memberId?: string; memberName?: string; setup?: string }>();
   const memberId = firstParam(params.memberId);
   const memberName = firstParam(params.memberName) || 'ผู้รับการดูแล';
@@ -43,21 +38,9 @@ export default function IdentityEnrollmentScreen() {
   const [consentAt, setConsentAt] = useState<string | null>(null);
   const [references, setReferences] = useState<IdentityReference[]>([]);
   const nativeIdentity = supportsMonitoringIdentity() && process.env.EXPO_PUBLIC_AI_MODE !== 'home_worker';
-  const requiredPoses = nativeIdentity ? IDENTITY_POSES.filter((pose) => pose.key !== 'full_body') : IDENTITY_POSES;
-  const completedPoses = requiredPoses.filter((pose) => references.some((reference) => reference.pose === pose.key)).length;
   const [loading, setLoading] = useState(true);
   const [busyPose, setBusyPose] = useState<IdentityPose | null>(null);
   const [consentBusy, setConsentBusy] = useState(false);
-  const [capturePose, setCapturePose] = useState<IdentityPose | FaceScanTarget | null>(null);
-  const [showBodyReference, setShowBodyReference] = useState(false);
-  const [showFacePhotos, setShowFacePhotos] = useState(false);
-  const guidedScan = supportsGuidedFaceScan();
-  const referencesChanged = useRef(false);
-
-  const referencesByPose = useMemo(() => new Map(
-    references.map((reference) => [reference.pose, reference]),
-  ), [references]);
-
   const load = useCallback(async () => {
     if (!memberId) {
       setLoading(false);
@@ -101,48 +84,6 @@ export default function IdentityEnrollmentScreen() {
     }
   };
 
-  const chooseImage = async (pose: IdentityPose) => {
-    if (!consentAt) {
-      Alert.error('ต้องยืนยันความยินยอมก่อน', 'ข้อมูลจากการสแกนเป็นข้อมูลส่วนบุคคล กรุณายืนยันความยินยอมก่อนเริ่มสแกน');
-      return;
-    }
-    setBusyPose(pose);
-    try {
-      const fullBody = pose === 'full_body';
-      const options: ImagePicker.ImagePickerOptions = {
-        mediaTypes: ['images'],
-        allowsEditing: true,
-        aspect: fullBody ? [3, 4] : [1, 1],
-        quality: 1,
-        base64: false,
-        cameraType: fullBody ? ImagePicker.CameraType.back : ImagePicker.CameraType.front,
-      };
-      const result = await ImagePicker.launchImageLibraryAsync(options);
-      if (result.canceled) return;
-      const image = result.assets[0];
-      if (!image?.uri) throw new Error('อ่านข้อมูลรูปไม่ได้ กรุณาเลือกรูปใหม่');
-      const base64 = await prepareIdentityImage(image.uri, fullBody);
-      await validateFacePhoto(base64, fullBody);
-      await saveIdentityReference({ familyId, memberId, pose, base64 });
-      requestCameraMonitoringRefresh();
-      await load();
-    } catch (error) {
-      Alert.error('สแกนไม่สำเร็จ', error instanceof FacePhotoError ? error.message : getFriendlyErrorMessage(error, 'ตรวจว่าภาพชัดเจนแล้วลองอีกครั้ง แอปจะปรับขนาดภาพให้อัตโนมัติ'));
-    } finally {
-      setBusyPose(null);
-    }
-  };
-
-  const openImageSource = (pose: IdentityPose) => Alert.alert(
-    pose === 'full_body' ? 'สแกนรูปร่าง' : 'สแกนใบหน้า',
-    'จัดบุคคลให้อยู่ในกรอบและไม่มีคนอื่นอยู่ในภาพ แอปจะปรับขนาดรูปให้อัตโนมัติ',
-    [
-      { text: 'เปิดกล้องสแกน', onPress: () => { if (consentAt) setCapturePose(pose); else Alert.error('ต้องยืนยันความยินยอมก่อน', 'กรุณายืนยันความยินยอมก่อนเก็บรูป'); } },
-      { text: 'เลือกจากคลังรูป', onPress: () => void chooseImage(pose) },
-      { text: 'ยกเลิก', style: 'cancel' },
-    ],
-  );
-
   const confirmDelete = (reference: IdentityReference) => Alert.confirm(
     'ลบข้อมูลสแกนมุมนี้?',
     'ระบบจะมีข้อมูลสำหรับยืนยันบุคคลน้อยลง',
@@ -152,6 +93,7 @@ export default function IdentityEnrollmentScreen() {
         setBusyPose(reference.pose);
         try {
           await deleteIdentityReference(reference);
+          requestCameraMonitoringRefresh();
           await load();
         } catch (error) {
           Alert.error('ลบรูปไม่สำเร็จ', getFriendlyErrorMessage(error));
@@ -169,6 +111,7 @@ export default function IdentityEnrollmentScreen() {
         setConsentBusy(true);
         try {
           await withdrawIdentityConsent(memberId);
+          requestCameraMonitoringRefresh();
           await load();
         } catch (error) {
           Alert.error('ลบข้อมูลไม่สำเร็จ', getFriendlyErrorMessage(error));
@@ -210,88 +153,24 @@ export default function IdentityEnrollmentScreen() {
             {consentBusy ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.consentButtonText}>ยืนยันว่าได้รับความยินยอมแล้ว</Text>}
           </TouchableOpacity>
         </View> : <>
-          {supportsGuidedFaceScan() && <TouchableOpacity accessibilityRole="button" style={[styles.scanButton, { backgroundColor: colors.accent }]} onPress={() => setCapturePose('all')}>
-            <MaterialCommunityIcons name="face-recognition" size={28} color={colors.onAccent} />
-            <View style={{ flex: 1 }}><Text style={styles.scanButtonTitle}>เริ่มสแกนใบหน้าทีละมุม</Text><Text style={styles.scanButtonDetail}>แอปถ่ายให้อัตโนมัติ ตรวจรูปแต่ละมุมก่อนบันทึก</Text></View>
-          </TouchableOpacity>}
-          <View style={styles.progressRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>{nativeIdentity ? 'รูปใบหน้าสำหรับยืนยันบุคคล' : 'รูปใบหน้าและเต็มตัว'}</Text>
-              <Text style={[styles.sectionSubtitle, { color: colors.textSecondary }]}>{nativeIdentity ? 'สแกนใบหน้าให้ครบ · รูปเต็มตัวเป็นภาพเสริมสำหรับตรวจสอบเหตุ' : supportsGuidedFaceScan() ? 'สแกนใบหน้า 3 มุมในครั้งเดียว · ถ่ายเต็มตัวแยกอีก 1 รูป' : supportsFaceInspection() ? 'ถ่ายรูปในแอปและตรวจใบหน้าก่อนบันทึก' : 'ถ่ายรูปอ้างอิง · ตรวจใบหน้าอัตโนมัติได้ใน APK รุ่นใหม่'}</Text>
-            </View>
-            <View style={[styles.progressPill, { backgroundColor: completedPoses === requiredPoses.length ? '#DCFCE7' : colors.inputBg }]}>
-              <Text style={{ color: completedPoses === requiredPoses.length ? '#15803D' : colors.textSecondary, fontWeight: '800' }}>{completedPoses}/{requiredPoses.length}</Text>
-            </View>
-          </View>
-
-          {completedPoses === requiredPoses.length && <View style={[styles.infoCard, { backgroundColor: colors.accentBg }]}>
-            <View style={{ flex: 1 }}><Text style={{ color: colors.textPrimary, fontWeight: '800' }}>บันทึกรูปอ้างอิงแล้ว</Text>
-              <Text style={{ color: colors.textSecondary }}>กลับไปตรวจการเตรียมใบหน้าและกล้อง ระบบอาจใช้เวลาสักครู่ การมีรูปครบยังไม่ใช่ผลยืนยันตัวคนในกล้อง</Text>
-              <TouchableOpacity style={{ minHeight: readability.touchTargetSize, justifyContent: 'center', paddingVertical: 10 }}
-                accessibilityRole="button" onPress={() => { requestCameraMonitoringRefresh(); router.navigate('/setup-guide'); }}>
-                <Text style={{ color: colors.accentText, fontWeight: '800' }}>ต่อไป: ตรวจความพร้อม</Text>
-              </TouchableOpacity></View>
-          </View>}
-
-          {guidedScan && <TouchableOpacity accessibilityRole="button" accessibilityState={{ expanded: showFacePhotos }}
-            style={{ minHeight: readability.touchTargetSize, justifyContent: 'center' }} onPress={() => setShowFacePhotos(value => !value)}>
-            <Text style={{ color: colors.accentText }}>{showFacePhotos ? 'ย่อรายการรูปใบหน้า' : 'ดูหรือจัดการรูปใบหน้าแต่ละมุม'}</Text>
-          </TouchableOpacity>}
-          <View style={styles.referenceGrid}>
-            {IDENTITY_POSES.filter(pose => pose.key === 'full_body'
-              ? !nativeIdentity || showBodyReference || referencesByPose.has('full_body')
-              : !guidedScan || showFacePhotos).map((pose) => {
-              const reference = referencesByPose.get(pose.key);
-              const busy = busyPose === pose.key;
-              return <View key={pose.key} style={[styles.referenceCard, seniorMode && { width: '100%' }, { backgroundColor: colors.card, borderColor: reference ? emerald : colors.cardBorder }]}>
-                <TouchableOpacity style={[styles.imageArea, { backgroundColor: colors.inputBg }]} onPress={() => openImageSource(pose.key)} disabled={busy}>
-                  {busy ? <ActivityIndicator color={emerald} /> : reference?.signed_url
-                    ? <Image source={{ uri: reference.signed_url }} style={styles.referenceImage} contentFit="cover" />
-                    : <MaterialCommunityIcons name={pose.key === 'full_body' ? 'human-handsup' : 'face-recognition'} size={38} color={colors.textMuted} />}
-                </TouchableOpacity>
-                <Text style={[styles.poseLabel, { color: colors.textPrimary }]}>{pose.label}</Text>
-                <Text style={[styles.poseDescription, { color: colors.textSecondary }]} numberOfLines={2}>{pose.description}</Text>
-                <View style={styles.referenceActions}>
-                  <TouchableOpacity style={{ minHeight: readability.touchTargetSize, justifyContent: 'center', flex: 1 }} onPress={() => openImageSource(pose.key)} disabled={busy} accessibilityRole="button">
-                    <Text style={styles.replaceText}>{reference ? 'สแกนใหม่' : 'เริ่มสแกน'}</Text>
-                  </TouchableOpacity>
-                  {reference && <TouchableOpacity style={{ minHeight: readability.touchTargetSize, minWidth: readability.touchTargetSize, justifyContent: 'center', alignItems: 'center' }} accessibilityLabel={`ลบรูป ${pose.label}`} onPress={() => confirmDelete(reference)} disabled={busy}>
-                    <MaterialCommunityIcons name="trash-can-outline" size={19} color="#B94747" />
-                  </TouchableOpacity>}
-                </View>
-              </View>;
-            })}
-          </View>
-
-          {nativeIdentity && !referencesByPose.has('full_body') && <TouchableOpacity accessibilityRole="button"
-            onPress={() => setShowBodyReference(current => !current)} style={{ minHeight: readability.touchTargetSize, justifyContent: 'center', marginTop: 12 }}>
-            <Text style={{ color: colors.accentText, fontWeight: '700' }}>{showBodyReference ? 'ซ่อนรูปเต็มตัวเสริม' : 'เพิ่มรูปเต็มตัวเสริม (ไม่บังคับ)'}</Text>
-          </TouchableOpacity>}
-
-          <View style={[styles.warningCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-            <MaterialCommunityIcons name="information-outline" size={21} color={colors.accentText} />
-            <Text style={[styles.warningText, { color: colors.textSecondary }]}>การยืนยันบุคคลใช้ใบหน้า รูปเต็มตัวมีไว้ให้ผู้ดูแลตรวจสอบเหตุ หากหน้าไม่ชัดหรือมีคนบัง ระบบอาจยังยืนยันไม่ได้</Text>
-          </View>
-
-          
+          <TouchableOpacity accessibilityRole="button" style={[styles.scanButton, { backgroundColor: colors.accent }]}
+            onPress={() => router.push({ pathname: '/body-enrollment', params: { familyId, memberId, name: memberName } })}>
+            <MaterialCommunityIcons name="human" size={28} color={colors.onAccent} />
+            <View style={{ flex: 1 }}><Text style={styles.scanButtonTitle}>สแกนเต็มตัวอัตโนมัติ</Text>
+            <Text style={styles.scanButtonDetail}>ยืนหรือนั่งให้เห็นตั้งแต่ศีรษะถึงเท้า กล้องจะถ่ายให้เมื่ออยู่ในกรอบ</Text></View>
+          </TouchableOpacity>
+          {references.map(ref => <View key={ref.id} style={[styles.infoCard, { backgroundColor: colors.card }]}>
+            {ref.signed_url && <Image source={{ uri: ref.signed_url }} style={{ width: 60, height: 75 }} contentFit="contain" cachePolicy="none" />}
+            <Text style={{ flex: 1, color: colors.textPrimary }}>{IDENTITY_POSES.find(p => p.key === ref.pose)?.label}</Text>
+            <TouchableOpacity accessibilityRole="button" onPress={() => confirmDelete(ref)} disabled={busyPose !== null} style={styles.backButton}>
+              <Text style={{ color: colors.dangerText }}>ลบ</Text>
+            </TouchableOpacity>
+          </View>)}
           <TouchableOpacity style={styles.withdrawButton} onPress={confirmWithdraw} disabled={consentBusy}>
             <Text style={[styles.withdrawText, { color: colors.dangerText }]}>ลบรูปและถอนความยินยอม</Text>
           </TouchableOpacity>
         </>}
       </ScrollView>}
-    <FaceCaptureModal pose={capturePose} onClose={() => {
-      setCapturePose(null);
-      if (referencesChanged.current) { referencesChanged.current = false; void load(); }
-    }} onSave={async (pose, base64) => {
-      if (!consentAt || !familyId || !memberId) throw new Error('กรุณายืนยันความยินยอมและตรวจข้อมูลครอบครัวก่อน');
-      await saveIdentityReference({ familyId, memberId, pose, base64 });
-      referencesChanged.current = true;
-    }} onSaveSet={async (photos, options) => {
-      if (!consentAt || !familyId || !memberId) throw new Error('กรุณายืนยันความยินยอมและตรวจข้อมูลครอบครัวก่อน');
-      await saveIdentityReferenceSet({ familyId, memberId, photos, options });
-      requestCameraMonitoringRefresh();
-      referencesChanged.current = true;
-    }} />
   </View>;
 }
 

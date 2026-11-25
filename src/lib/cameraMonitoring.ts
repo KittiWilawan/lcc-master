@@ -92,7 +92,8 @@ export async function refreshCameraMonitorStates(): Promise<void> {
 export function subscribeCameraMonitoring(listener: () => void): () => void {
   listeners.add(listener);
   if (!eventSubscription && hasNativeCameraMonitoring()) {
-    eventSubscription = new NativeEventEmitter(native as never).addListener('CameraMonitorUpdate', (json: string) => {
+    eventSubscription = new NativeEventEmitter(native as never).addListener('CameraMonitorUpdate', (json: unknown) => {
+      if (typeof json !== 'string') return;
       try { acceptState(JSON.parse(json) as CameraMonitorState); } catch { /* Reject invalid native events. */ }
     });
     void refreshCameraMonitorStates().catch(() => undefined);
